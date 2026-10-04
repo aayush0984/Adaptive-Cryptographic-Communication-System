@@ -1,0 +1,3 @@
+cryptography>=42,<47
+pytest>=8,<10
+pymongo>=4.0

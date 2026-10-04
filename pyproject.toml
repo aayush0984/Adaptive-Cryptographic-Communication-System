@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adaptive-iot-crypto"
+version = "0.2.0"
+description = "Adaptive cryptographic selection and traffic analysis for IoT communication"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=42,<47",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+]

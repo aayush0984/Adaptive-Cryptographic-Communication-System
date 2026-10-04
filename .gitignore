@@ -1,0 +1,61 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+env/
+venv/
+
+# Environment variables
+.env
+.env.*
+
+# IDE / editor files
+.vscode/
+.idea/
+
+# Build / distribution
+build/
+dist/
+*.egg-info/
+
+# Data and generated files
+data/
+*.csv
+*.json
+*.db
+*.sqlite3
+
+# Coverage / testing
+.coverage
+htmlcov/
+*.cover
+.coverage.*
+.pytest_cache/
+
+# Logs
+*.log
+
+# PyCharm
+*.iml
+
+# macOS
+.DS_Store
+
+# Misc
+*.bak
+*.tmp
+
+# Capture files (ignore binary captures)
+captures/raw/*.pcap
+captures/raw/*.pcapng
+
+# Report outputs (ignore generated charts/tables but keep .gitkeep)
+reports/charts/*
+reports/tables/*
+
+# Do not ignore .gitkeep files
+!**/.gitkeep
