@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import pymongo
 from pymongo.database import Database
 
-DEFAULT_MONGO_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
-DEFAULT_DB_NAME = os.getenv("MONGODB_DB", "iot_security")
+from config import get_env
+
+DEFAULT_MONGO_URI = get_env("MONGODB_URI", "mongodb://localhost:27017/")
+DEFAULT_DB_NAME = get_env("MONGODB_DB", "iot_security")
 
 _client_cache: dict[str, pymongo.MongoClient[dict[str, Any]]] = {}
 
