@@ -383,6 +383,21 @@ def check_profile_compatibility_detailed(
             f"predicted combined latency {combined_ms:.2f} ms"
         )
 
+    # ── 7. Packet / Communication size feasibility ───────────────────────────
+    app_bytes = sender_evidence.doc.get("application_bytes", 0)
+    limit_a = getattr(sender, "maximum_packet_size_bytes", None)
+    limit_b = getattr(receiver, "maximum_packet_size_bytes", None)
+    if limit_a is not None and app_bytes > limit_a:
+        reasons.append(
+            f"sender maximum_packet_size_bytes={limit_a} < "
+            f"predicted packet overhead {app_bytes} B for profile '{profile.profile_id}'"
+        )
+    if limit_b is not None and app_bytes > limit_b:
+        reasons.append(
+            f"receiver maximum_packet_size_bytes={limit_b} < "
+            f"predicted packet overhead {app_bytes} B for profile '{profile.profile_id}'"
+        )
+
     # ── Result ───────────────────────────────────────────────────────────────
     app_bytes = sender_evidence.doc.get("application_bytes", 0)
     breakdown = dict(sender_evidence.doc.get("timings_ms", {}))

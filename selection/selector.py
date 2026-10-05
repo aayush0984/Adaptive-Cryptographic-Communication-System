@@ -7,36 +7,32 @@ Public API
                             filters, score feasible ones, persist the experiment
                             document, and return a :class:`SelectionResult`.
 
-``prompt_device_selection`` – interactive 1-indexed device menu (unchanged
-                               from Phase 8 except for display cleanup).
+``prompt_device_selection`` – interactive 1-indexed device menu.
 
 ``prompt_message`` – ask the user for the plaintext message to transmit.
 
 Selection objective
 -------------------
-Minimise predicted end-to-end latency (sender_total_ms + receiver_total_ms)
-among profiles that satisfy all mandatory constraints.
+Minimise the dynamically weighted normalized cost of end-to-end latency,
+memory consumption, communication overhead, and energy, subject to mandatory
+security and resource constraints.
 
 Tie-breaking (deterministic)
-    1. Lower application_bytes (fewer network bytes).
-    2. Lower profile_id string (stable alphabetical order).
-
-This matches the requirement: if one profile consistently wins, that is
-reported honestly rather than forced to change per scenario.
+    1. Lower dynamically weighted score.
+    2. Lower application_bytes (fewer network bytes).
+    3. Lower profile_id string (stable alphabetical order).
 
 Experiment persistence
 ----------------------
 Every call to ``select_best_profile`` upserts an experiment document in the
-``experiments`` MongoDB collection.  The document records:
+``experiments`` MongoDB collection. The document records:
 
 - sender_id, receiver_id, message_size_bytes (not the plaintext)
-- runtime constraint snapshots
-- all candidate profiles, their evidence, and rejection reasons
+- runtime constraint snapshots and combined constraint bounds
+- constraint pressures and dynamic weights
+- all candidate profiles, their evidence, normalized metrics, and rejection reasons
 - the selected profile and justification
 - whether the result is from demonstration (local-computer) data
-
-Actual observed results are written separately by the server/client after
-the communication round-trip.
 """
 
 from __future__ import annotations
@@ -55,7 +51,11 @@ from selection.compatibility import (
     InsufficientEvidenceError,
     check_profile_compatibility_detailed,
 )
-from selection.scoring import score_candidates
+from selection.scoring import (
+    derive_dynamic_weights,
+    score_candidates,
+    validate_custom_weights,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -63,25 +63,30 @@ from selection.scoring import score_candidates
 # ---------------------------------------------------------------------------
 
 class SelectionResult:
-    """Full result of an adaptive profile selection run.
+    """Full result of an adaptive profile selection run with full explainability.
 
     Attributes
     ----------
     winning_profile : CryptoProfile
         The selected profile.
     winning_bench_doc : dict
-        The sender-side benchmark document used to predict the winner's latency.
+        The sender-side benchmark document used to predict costs.
     winning_score : float
         The normalised weighted score (lower is better).
     experiment_id : str
         Unique ID for this selection run; also stored in MongoDB.
     candidate_details : list[dict]
-        Per-profile evidence, predicted costs, and feasibility check outcomes.
+        Per-profile evidence, predicted costs, feasibility outcomes, and normalized metrics.
     is_demonstration_mode : bool
         True when any evidence comes from ``local-computer`` measurements.
-        Feasibility decisions apply to the host machine, not physical boards.
     selection_reason : str
         Human-readable justification for the winning profile.
+    dynamic_weights : dict
+        Weights used for scoring {'wt': ..., 'wm': ..., 'wc': ..., 'we': ...}.
+    constraint_pressures : dict
+        Calculated constraint pressures {'p_time': ..., 'p_memory': ..., 'p_communication': ..., 'p_energy': ...}.
+    combined_constraints : dict
+        Combined constraint summary for Device A and Device B.
     """
 
     def __init__(
@@ -93,6 +98,9 @@ class SelectionResult:
         candidate_details: List[Dict[str, Any]],
         is_demonstration_mode: bool,
         selection_reason: str,
+        dynamic_weights: Optional[Dict[str, float]] = None,
+        constraint_pressures: Optional[Dict[str, float]] = None,
+        combined_constraints: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.winning_profile = winning_profile
         self.winning_bench_doc = winning_bench_doc
@@ -101,6 +109,9 @@ class SelectionResult:
         self.candidate_details = candidate_details
         self.is_demonstration_mode = is_demonstration_mode
         self.selection_reason = selection_reason
+        self.dynamic_weights = dynamic_weights or {}
+        self.constraint_pressures = constraint_pressures or {}
+        self.combined_constraints = combined_constraints or {}
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +122,7 @@ def prompt_device_selection(
     prompt_text: str,
     devices: List[Device],
 ) -> Device:
-    """Present a 1-indexed list of devices and return the chosen Device.
-
-    Validates selections and re-prompts on invalid input.
-    """
+    """Present a 1-indexed list of devices and return the chosen Device."""
     if not devices:
         raise ValueError("No active devices found in the MongoDB 'devices' collection.")
 
@@ -123,7 +131,8 @@ def prompt_device_selection(
     for idx, dev in enumerate(displayed, 1):
         ram = f"{dev.available_memory_kb:.0f} KB RAM"
         sec = f"{dev.security_requirement} sec"
-        print(f"  {idx}. {dev.name} [{ram}, {sec}]")
+        pwr = f"{dev.power_source} pwr"
+        print(f"  {idx}. {dev.name} [{ram}, {sec}, {pwr}]")
 
     while True:
         try:
@@ -144,19 +153,7 @@ def prompt_device_selection(
 
 
 def prompt_message() -> str:
-    """Ask the user to enter the message to transmit.
-
-    Rules
-    -----
-    - The prompt accepts any Unicode string.
-    - An empty string is accepted and triggers a confirmation warning.
-    - The plaintext is never stored to MongoDB or written to log files.
-
-    Returns
-    -------
-    str
-        The raw user-entered message string (may be empty).
-    """
+    """Ask the user to enter the message to transmit."""
     print("\n--- Enter the message to transmit ---")
     print("  (Unicode is supported; leave blank and press Enter for an empty message)")
     try:
@@ -184,18 +181,9 @@ def select_best_profile(
     experiment_id: Optional[str] = None,
     db: Any = None,
 ) -> Tuple[CryptoProfile, Dict[str, Any], float]:
-    """Select the best feasible CryptoProfile for (sender → receiver).
+    """Select the best feasible CryptoProfile for (sender -> receiver).
 
-    This function is the public API used by ``client.py``.  It returns the same
-    3-tuple ``(winning_profile, winning_bench_doc, winning_score)`` as before
-    so existing call-sites remain compatible.  Call :func:`select_best_profile_full`
-    to also receive the :class:`SelectionResult` with full provenance.
-
-    Raises
-    ------
-    ValueError
-        When no profile passes all mandatory constraints, or when no profiles
-        are enabled in the database.
+    Public 3-tuple API for backward compatibility.
     """
     result = select_best_profile_full(
         sender=sender,
@@ -220,29 +208,10 @@ def select_best_profile_full(
     experiment_id: Optional[str] = None,
     db: Any = None,
 ) -> SelectionResult:
-    """Full selection run returning :class:`SelectionResult` with provenance.
+    """Full two-stage adaptive selection run returning SelectionResult with provenance.
 
-    Parameters
-    ----------
-    sender, receiver : Device
-        Device A (sender) and Device B (receiver) selected by the user.
-    message_size_bytes : int
-        UTF-8 byte count of the user-provided message.  Used for benchmark
-        retrieval and cost estimation.
-    profile_repo, benchmark_repo : optional
-        Injected repositories (useful for unit tests).
-    weights : optional dict
-        Scoring weights ``{wt, wm, wc, we}``.  Defaults to equal (0.25 each).
-    experiment_id : optional str
-        Correlation ID.  A new UUID is generated when omitted.
-    db : optional
-        MongoDB database handle for experiment persistence.  Falls back to the
-        default connection when ``None``.
-
-    Raises
-    ------
-    ValueError
-        When no enabled profiles exist, or none pass all constraints.
+    Stage 1: Hard constraint filtering (Security, Memory, Packet limit, Latency, CPU).
+    Stage 2: Dynamic weight derivation from combined constraints & weighted scoring.
     """
     if profile_repo is None:
         profile_repo = ProfileRepository()
@@ -255,7 +224,41 @@ def select_best_profile_full(
     if not enabled_profiles:
         raise ValueError("No active crypto profiles found in the 'crypto_profiles' collection.")
 
-    # ── Evaluate every enabled profile ──────────────────────────────────────
+    # ── Combined constraints summary ─────────────────────────────────────────
+    # Stricter requirement between sender and receiver
+    sec_order = {"standard": 0, "high": 1}
+    strictest_sec = "high" if (
+        sec_order.get(sender.security_requirement, 0) == 1 or
+        sec_order.get(receiver.security_requirement, 0) == 1
+    ) else "standard"
+
+    combined_constraints = {
+        "memory_limit_kb": min(sender.available_memory_kb, receiver.available_memory_kb),
+        "latency_limit_ms": min(
+            getattr(sender, "latency_requirement_ms", 2000.0) or 2000.0,
+            getattr(receiver, "latency_requirement_ms", 2000.0) or 2000.0,
+        ),
+        "packet_limit_bytes": min(
+            getattr(sender, "maximum_packet_size_bytes", 1500) or 1500,
+            getattr(receiver, "maximum_packet_size_bytes", 1500) or 1500,
+        ),
+        "required_security": strictest_sec,
+        "sender_power_source": getattr(sender, "power_source", "mains"),
+        "receiver_power_source": getattr(receiver, "power_source", "mains"),
+    }
+
+    # ── Derive or validate weights ───────────────────────────────────────────
+    if weights is not None:
+        final_weights = validate_custom_weights(weights)
+        pressures = {}
+    else:
+        final_weights, pressures = derive_dynamic_weights(
+            device_a=sender,
+            device_b=receiver,
+            message_size_bytes=message_size_bytes,
+        )
+
+    # ── STAGE 1: Hard filtering on every enabled profile ─────────────────────
     feasible_pairs: List[Tuple[CryptoProfile, CompatibilityResult]] = []
     candidate_details: List[Dict[str, Any]] = []
     any_demo = False
@@ -271,7 +274,6 @@ def select_best_profile_full(
         if compat.is_demonstration_mode:
             any_demo = True
 
-        # Build evidence provenance for persistence
         sender_run_id = (
             compat.sender_evidence.doc.get("run_id") if compat.sender_evidence else None
         )
@@ -309,9 +311,8 @@ def select_best_profile_full(
         if compat.compatible and compat.sender_evidence is not None:
             feasible_pairs.append((profile, compat))
 
-    # ── No feasible profile ──────────────────────────────────────────────────
+    # ── STAGE 1 failure: No feasible profile ─────────────────────────────────
     if not feasible_pairs:
-        # Categorise the failure
         all_reasons = {d["profile_id"]: d["rejection_reasons"] for d in candidate_details}
         insufficient = [
             pid for pid, reasons in all_reasons.items()
@@ -322,7 +323,6 @@ def select_best_profile_full(
             if reasons and not any("insufficient benchmark evidence" in r for r in reasons)
         ]
 
-        failure_category: str
         if insufficient and not no_constraint:
             failure_category = "insufficient_benchmark_evidence"
         elif not insufficient:
@@ -342,6 +342,9 @@ def select_best_profile_full(
             selected_profile_id=None,
             selection_reason=None,
             is_demonstration_mode=any_demo,
+            dynamic_weights=final_weights,
+            constraint_pressures=pressures,
+            combined_constraints=combined_constraints,
         )
         raise ValueError(
             f"No compatible crypto profile found "
@@ -351,46 +354,50 @@ def select_best_profile_full(
             f"Per-profile rejections: {all_reasons}"
         )
 
-    # ── Score feasible candidates ────────────────────────────────────────────
-    # Build benchmark list for the scorer.  We use the sender benchmark document
-    # but add the receiver's predicted latency so the scorer's "time" dimension
-    # reflects combined end-to-end latency rather than sender-only cost.
+    # ── STAGE 2: Dynamic optimization & scoring ──────────────────────────────
     bench_docs_for_scoring: List[Dict[str, Any]] = []
     for profile, compat in feasible_pairs:
         doc = dict(compat.sender_evidence.doc)  # type: ignore[union-attr]
-        # Augment total timing with receiver cost for combined latency objective
         recv_ms = compat.predicted_receiver_total_ms or 0.0
         combined_ms = doc["timings_ms"]["total"] + recv_ms
         doc = dict(doc)
         doc["timings_ms"] = dict(doc["timings_ms"])
         doc["timings_ms"]["total"] = combined_ms
+        # Combined memory cost (max peak between endpoints)
+        doc["peak_memory_kb"] = max(
+            compat.predicted_sender_peak_kb or 0.0,
+            compat.predicted_receiver_peak_kb or 0.0,
+        )
         doc["_profile_ref"] = profile
         bench_docs_for_scoring.append(doc)
 
-    scored = score_candidates(bench_docs_for_scoring, weights=weights)
+    # Score feasible candidates using dynamic weights
+    scored_items = score_candidates(bench_docs_for_scoring, weights=final_weights)
 
-    # Deterministic tie-breaking: score → application_bytes → profile_id
-    scored.sort(
-        key=lambda pair: (
-            pair[1],
-            pair[0].get("application_bytes", 0),
-            pair[0].get("profile_id", ""),
-        )
-    )
-
-    winning_doc, winning_score = scored[0]
+    winning_doc, winning_score, winning_norm = scored_items[0]
     winning_profile: CryptoProfile = winning_doc["_profile_ref"]
 
-    # Build selection reason
+    # Attach normalized metric breakdowns and final scores back into candidate_details
+    for doc, s_val, norm_dict in scored_items:
+        p_ref = doc["_profile_ref"]
+        for detail in candidate_details:
+            if detail["profile_id"] == p_ref.profile_id:
+                detail["final_score"] = s_val
+                detail["normalized_metrics"] = norm_dict
+                break
+
+    # Build human-readable explainability justification
     winning_compat = next(c for p, c in feasible_pairs if p.profile_id == winning_profile.profile_id)
     combined_ms = (winning_compat.predicted_sender_total_ms or 0.0) + (winning_compat.predicted_receiver_total_ms or 0.0)
     selection_reason = (
         f"Profile '{winning_profile.profile_id}' ({winning_profile.name}) selected. "
-        f"Objective: minimise predicted end-to-end latency. "
-        f"Predicted combined latency: {combined_ms:.2f} ms "
-        f"(sender {winning_compat.predicted_sender_total_ms:.2f} ms + "
-        f"receiver {winning_compat.predicted_receiver_total_ms:.2f} ms). "
-        f"Score: {winning_score:.4f}."
+        f"Objective: Minimise the dynamically weighted normalized cost of end-to-end "
+        f"latency, memory consumption, communication overhead, and energy, "
+        f"subject to mandatory security and resource constraints. "
+        f"Weights: time={final_weights['wt']*100:.1f}%, mem={final_weights['wm']*100:.1f}%, "
+        f"comm={final_weights['wc']*100:.1f}%, energy={final_weights['we']*100:.1f}%. "
+        f"Predicted end-to-end latency: {combined_ms:.2f} ms. "
+        f"Final weighted score: {winning_score:.4f}."
     )
     if any_demo:
         selection_reason += (
@@ -410,6 +417,9 @@ def select_best_profile_full(
         selected_profile_id=winning_profile.profile_id,
         selection_reason=selection_reason,
         is_demonstration_mode=any_demo,
+        dynamic_weights=final_weights,
+        constraint_pressures=pressures,
+        combined_constraints=combined_constraints,
     )
 
     return SelectionResult(
@@ -420,6 +430,9 @@ def select_best_profile_full(
         candidate_details=candidate_details,
         is_demonstration_mode=any_demo,
         selection_reason=selection_reason,
+        dynamic_weights=final_weights,
+        constraint_pressures=pressures,
+        combined_constraints=combined_constraints,
     )
 
 
@@ -440,11 +453,11 @@ def _persist_experiment(
     selected_profile_id: Optional[str],
     selection_reason: Optional[str],
     is_demonstration_mode: bool,
+    dynamic_weights: Optional[Dict[str, float]] = None,
+    constraint_pressures: Optional[Dict[str, float]] = None,
+    combined_constraints: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Upsert the selection record into the experiments collection.
-
-    The plaintext is never stored.  Only the byte count is persisted.
-    """
+    """Upsert the selection record into the experiments collection."""
     try:
         if db is None:
             from database.connection import get_database
@@ -456,21 +469,29 @@ def _persist_experiment(
             "receiver_id": receiver.device_id,
             "sender_name": sender.name,
             "receiver_name": receiver.name,
-            # Constraint snapshots at selection time
             "sender_constraints": {
                 "available_memory_kb": sender.available_memory_kb,
                 "security_requirement": sender.security_requirement,
                 "cpu_level": sender.cpu_level,
                 "latency_requirement_ms": sender.latency_requirement_ms,
+                "power_source": getattr(sender, "power_source", "mains"),
             },
             "receiver_constraints": {
                 "available_memory_kb": receiver.available_memory_kb,
                 "security_requirement": receiver.security_requirement,
                 "cpu_level": receiver.cpu_level,
                 "latency_requirement_ms": receiver.latency_requirement_ms,
+                "power_source": getattr(receiver, "power_source", "mains"),
             },
-            "message_size_bytes": message_size_bytes,  # byte count only — no plaintext
-            "optimization_objective": "minimise_predicted_end_to_end_latency",
+            "combined_constraints": combined_constraints or {},
+            "constraint_pressures": constraint_pressures or {},
+            "dynamic_weights": dynamic_weights or {},
+            "message_size_bytes": message_size_bytes,
+            "optimization_objective": (
+                "Minimise the dynamically weighted normalized cost of end-to-end "
+                "latency, memory consumption, communication overhead, and energy, "
+                "subject to mandatory security and resource constraints."
+            ),
             "candidate_profiles": candidate_details,
             "selected_profile_id": selected_profile_id,
             "selection_reason": selection_reason,
@@ -478,7 +499,6 @@ def _persist_experiment(
             "status": status,
             "is_demonstration_mode": is_demonstration_mode,
             "selected_at": datetime.now(timezone.utc),
-            # observed_results is written separately after the communication round-trip
         }
 
         db["experiments"].update_one(
@@ -487,5 +507,6 @@ def _persist_experiment(
             upsert=True,
         )
     except Exception as exc:
-        # Persistence failure must not interrupt the crypto flow
         print(f"[selector] Warning: could not persist experiment record: {exc}", flush=True)
+
+

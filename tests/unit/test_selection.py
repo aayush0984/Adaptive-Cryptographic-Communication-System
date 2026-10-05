@@ -62,6 +62,8 @@ def _make_device(
     latency_requirement_ms: float = 2000.0,
     security_requirement: str = "standard",
     supported_algorithms: list | None = None,
+    power_source: str = "mains",
+    maximum_packet_size_bytes: int = 1500,
 ) -> Device:
     """[TEST FIXTURE] Create a Device with sensible defaults."""
     return Device(
@@ -69,12 +71,12 @@ def _make_device(
         name=name,
         cpu_level=cpu_level,
         available_memory_kb=available_memory_kb,
-        maximum_packet_size_bytes=1500,
+        maximum_packet_size_bytes=maximum_packet_size_bytes,
         latency_requirement_ms=latency_requirement_ms,
         security_requirement=security_requirement,
         supported_algorithms=supported_algorithms or ["RSA-2048", "ECDH-P256", "AES-128-GCM"],
         battery_level_percent=100.0,
-        power_source="mains",
+        power_source=power_source,
         active=True,
     )
 
@@ -527,10 +529,6 @@ class TestDeterministicTieBreaking(unittest.TestCase):
             _make_bench_doc("C1", "dev-a", total_ms=10.0, peak_kb=100.0, app_bytes=500),
             _make_bench_doc("C3", "dev-a", total_ms=10.0, peak_kb=100.0, app_bytes=100),
         ]
-        scored = score_candidates(candidates)
-        # With equal raw scores, the scorer itself applies profile_id then size tie-breaking.
-        # Our selector adds application_bytes as an additional tie-breaker, but the scorer
-        # already normalises — so here we verify determinism: same input → same output.
         result1 = score_candidates(candidates)
         result2 = score_candidates(candidates)
         self.assertEqual(result1[0][0]["profile_id"], result2[0][0]["profile_id"])
@@ -775,6 +773,250 @@ class TestBackwardCompatibility(unittest.TestCase):
         self.assertIsInstance(winning_profile, CryptoProfile)
         self.assertIsInstance(bench_doc, dict)
         self.assertIsInstance(score, float)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic Optimization & Weight Derivation Test Suite
+# ---------------------------------------------------------------------------
+
+class TestDynamicOptimizationSuite(unittest.TestCase):
+    """Comprehensive tests for dynamic weighting, constraint pressure, and Stage 1 vs 2."""
+
+    def test_scenario_1_both_mains_low_energy_pressure(self):
+        """1. Both devices mains-powered: energy has relatively low pressure/weight."""
+        from selection.scoring import derive_dynamic_weights
+        dev_a = _make_device("a", power_source="mains", latency_requirement_ms=1000.0, available_memory_kb=1024.0)
+        dev_b = _make_device("b", power_source="mains", latency_requirement_ms=1000.0, available_memory_kb=1024.0)
+        weights, pressures = derive_dynamic_weights(dev_a, dev_b, message_size_bytes=64)
+
+        self.assertAlmostEqual(pressures["p_energy"], 0.20, places=2)
+        self.assertLess(weights["we"], 0.35)
+
+    def test_scenario_2_one_battery_one_mains_increases_energy(self):
+        """2. One battery device + one mains device: energy importance increases."""
+        from selection.scoring import derive_dynamic_weights
+        dev_a = _make_device("a", power_source="battery", latency_requirement_ms=1000.0, available_memory_kb=1024.0)
+        dev_b = _make_device("b", power_source="mains", latency_requirement_ms=1000.0, available_memory_kb=1024.0)
+        weights_one_bat, pressures_one_bat = derive_dynamic_weights(dev_a, dev_b, message_size_bytes=64)
+
+        dev_m1 = _make_device("m1", power_source="mains", latency_requirement_ms=1000.0, available_memory_kb=1024.0)
+        dev_m2 = _make_device("m2", power_source="mains", latency_requirement_ms=1000.0, available_memory_kb=1024.0)
+        weights_mains, _ = derive_dynamic_weights(dev_m1, dev_m2, message_size_bytes=64)
+
+        self.assertAlmostEqual(pressures_one_bat["p_energy"], 0.80, places=2)
+        self.assertGreater(weights_one_bat["we"], weights_mains["we"])
+
+    def test_scenario_3_both_battery_highest_energy_importance(self):
+        """3. Both devices battery-powered: energy pressure is highest."""
+        from selection.scoring import derive_dynamic_weights
+        dev_a = _make_device("a", power_source="battery")
+        dev_b = _make_device("b", power_source="battery")
+        weights, pressures = derive_dynamic_weights(dev_a, dev_b, message_size_bytes=64)
+
+        self.assertAlmostEqual(pressures["p_energy"], 0.95, places=2)
+        self.assertGreater(weights["we"], 0.30)
+
+    def test_scenario_4_very_strict_latency_increases_time_weight(self):
+        """4. Very strict latency constraint: time weight increases significantly."""
+        from selection.scoring import derive_dynamic_weights
+        strict_a = _make_device("a", latency_requirement_ms=50.0, available_memory_kb=2048.0)
+        dev_b = _make_device("b", latency_requirement_ms=2000.0, available_memory_kb=2048.0)
+        weights_strict, pressures_strict = derive_dynamic_weights(strict_a, dev_b, message_size_bytes=64)
+
+        relaxed_a = _make_device("ra", latency_requirement_ms=2000.0, available_memory_kb=2048.0)
+        weights_relaxed, _ = derive_dynamic_weights(relaxed_a, dev_b, message_size_bytes=64)
+
+        self.assertGreater(pressures_strict["p_time"], 0.90)
+        self.assertGreater(weights_strict["wt"], weights_relaxed["wt"])
+
+    def test_scenario_5_very_constrained_memory_increases_memory_weight(self):
+        """5. Very constrained memory: memory weight increases."""
+        from selection.scoring import derive_dynamic_weights
+        tiny_a = _make_device("tiny", available_memory_kb=32.0, latency_requirement_ms=1000.0)
+        dev_b = _make_device("b", available_memory_kb=2048.0, latency_requirement_ms=1000.0)
+        weights_tiny, pressures_tiny = derive_dynamic_weights(tiny_a, dev_b, message_size_bytes=64)
+
+        large_a = _make_device("large", available_memory_kb=524288.0, latency_requirement_ms=1000.0)
+        weights_large, _ = derive_dynamic_weights(large_a, dev_b, message_size_bytes=64)
+
+        self.assertGreater(pressures_tiny["p_memory"], 0.90)
+        self.assertGreater(weights_tiny["wm"], weights_large["wm"])
+
+    def test_scenario_6_large_message_increases_communication_weight(self):
+        """6. Large message close to effective packet capacity increases communication weight."""
+        from selection.scoring import derive_dynamic_weights
+        dev_a = _make_device("a", maximum_packet_size_bytes=1024)
+        dev_b = _make_device("b", maximum_packet_size_bytes=1024)
+
+        weights_large, pressures_large = derive_dynamic_weights(dev_a, dev_b, message_size_bytes=1000)
+        weights_small, pressures_small = derive_dynamic_weights(dev_a, dev_b, message_size_bytes=20)
+
+        self.assertGreater(pressures_large["p_communication"], 0.90)
+        self.assertGreater(weights_large["wc"], weights_small["wc"])
+
+    def test_scenario_7_small_message_generous_capacity_decreases_communication_weight(self):
+        """7. Small message with generous communication limits: communication weight decreases."""
+        from selection.scoring import derive_dynamic_weights
+        dev_a = _make_device("a", maximum_packet_size_bytes=65535)
+        dev_b = _make_device("b", maximum_packet_size_bytes=65535)
+
+        weights, pressures = derive_dynamic_weights(dev_a, dev_b, message_size_bytes=16)
+        self.assertLessEqual(pressures["p_communication"], 0.10)
+        self.assertLess(weights["wc"], 0.15)
+
+    def test_scenario_8_profile_violating_security_rejected_in_stage_1(self):
+        """8. Profile violating required security must be rejected in Stage 1 regardless of score."""
+        sender = _make_device("sender", security_requirement="high")
+        receiver = _make_device("receiver", security_requirement="high")
+        # Standard profile C3 is faster, but high profile C4 meets requirement
+        c3 = _make_profile("C3", family="ECC", security_level="standard")
+        c4 = _make_profile("C4", family="ECC", security_level="high")
+
+        repo = _mock_bench_repo_for({
+            ("sender", "C3"): [_make_bench_doc("C3", "sender", total_ms=1.0)],
+            ("receiver", "C3"): [_make_bench_doc("C3", "receiver", total_ms=1.0)],
+            ("sender", "C4"): [_make_bench_doc("C4", "sender", total_ms=10.0)],
+            ("receiver", "C4"): [_make_bench_doc("C4", "receiver", total_ms=10.0)],
+        })
+        mock_prof_repo = MagicMock()
+        mock_prof_repo.list_enabled.return_value = [c3, c4]
+
+        res = select_best_profile_full(
+            sender=sender,
+            receiver=receiver,
+            message_size_bytes=64,
+            profile_repo=mock_prof_repo,
+            benchmark_repo=repo,
+            db=_no_op_db(),
+        )
+        self.assertEqual(res.winning_profile.profile_id, "C4")
+        # Check rejection explanation for C3
+        c3_detail = next(d for d in res.candidate_details if d["profile_id"] == "C3")
+        self.assertFalse(c3_detail["compatible"])
+        self.assertTrue(any("security" in r for r in c3_detail["rejection_reasons"]))
+
+    def test_scenario_9_profile_exceeding_hard_memory_rejected_in_stage_1(self):
+        """9. Profile exceeding hard memory constraint rejected in Stage 1 rather than penalized."""
+        sender = _make_device("sender", available_memory_kb=50.0)
+        receiver = _make_device("receiver", available_memory_kb=2048.0)
+        profile = _make_profile("C3", family="ECC")
+
+        # Benchmark requires 120 KB peak memory, exceeding sender's 50 KB
+        repo = _mock_bench_repo_for({
+            ("sender", "C3"): [_make_bench_doc("C3", "sender", peak_kb=120.0)],
+            ("receiver", "C3"): [_make_bench_doc("C3", "receiver", peak_kb=30.0)],
+        })
+        mock_prof_repo = MagicMock()
+        mock_prof_repo.list_enabled.return_value = [profile]
+
+        with self.assertRaises(ValueError) as ctx:
+            select_best_profile_full(
+                sender=sender,
+                receiver=receiver,
+                message_size_bytes=64,
+                profile_repo=mock_prof_repo,
+                benchmark_repo=repo,
+                db=_no_op_db(),
+            )
+        self.assertIn("no_profile_satisfies_constraints", str(ctx.exception))
+
+    def test_scenario_10_multiple_feasible_lowest_dynamic_score_wins(self):
+        """10. Multiple feasible profiles: lowest dynamically weighted score wins."""
+        sender = _make_device("sender", power_source="battery", latency_requirement_ms=100.0)
+        receiver = _make_device("receiver", power_source="battery", latency_requirement_ms=100.0)
+
+        # C1 (RSA, 80ms, 200KB RAM) vs C3 (ECC, 2ms, 30KB RAM)
+        c1 = _make_profile("C1", family="RSA")
+        c3 = _make_profile("C3", family="ECC")
+
+        repo = _mock_bench_repo_for({
+            ("sender", "C1"): [_make_bench_doc("C1", "sender", total_ms=40.0, peak_kb=100.0)],
+            ("receiver", "C1"): [_make_bench_doc("C1", "receiver", total_ms=40.0, peak_kb=100.0)],
+            ("sender", "C3"): [_make_bench_doc("C3", "sender", total_ms=1.0, peak_kb=20.0)],
+            ("receiver", "C3"): [_make_bench_doc("C3", "receiver", total_ms=1.0, peak_kb=20.0)],
+        })
+        mock_prof_repo = MagicMock()
+        mock_prof_repo.list_enabled.return_value = [c1, c3]
+
+        res = select_best_profile_full(
+            sender=sender,
+            receiver=receiver,
+            message_size_bytes=64,
+            profile_repo=mock_prof_repo,
+            benchmark_repo=repo,
+            db=_no_op_db(),
+        )
+        self.assertEqual(res.winning_profile.profile_id, "C3")
+        self.assertLessEqual(res.winning_score, 0.5)
+
+    def test_scenario_11_explicit_custom_weights_override_derived(self):
+        """11. Explicit custom weights override automatically derived weights."""
+        sender = _make_device("sender", power_source="battery")  # Would normally have high energy weight
+        receiver = _make_device("receiver", power_source="battery")
+        c3 = _make_profile("C3", family="ECC")
+
+        repo = _mock_bench_repo_for({
+            ("sender", "C3"): [_make_bench_doc("C3", "sender", total_ms=5.0)],
+            ("receiver", "C3"): [_make_bench_doc("C3", "receiver", total_ms=5.0)],
+        })
+        mock_prof_repo = MagicMock()
+        mock_prof_repo.list_enabled.return_value = [c3]
+
+        custom = {"wt": 0.80, "wm": 0.10, "wc": 0.05, "we": 0.05}
+        res = select_best_profile_full(
+            sender=sender,
+            receiver=receiver,
+            message_size_bytes=64,
+            profile_repo=mock_prof_repo,
+            benchmark_repo=repo,
+            weights=custom,
+            db=_no_op_db(),
+        )
+        self.assertAlmostEqual(res.dynamic_weights["wt"], 0.80, places=2)
+        self.assertAlmostEqual(res.dynamic_weights["we"], 0.05, places=2)
+
+    def test_scenario_12_identical_degenerate_benchmark_values(self):
+        """12. Identical/degenerate benchmark values: normalization must not divide by zero."""
+        from selection.scoring import score_candidates
+        candidates = [
+            _make_bench_doc("C1", "dev", total_ms=10.0, peak_kb=50.0, app_bytes=100),
+            _make_bench_doc("C2", "dev", total_ms=10.0, peak_kb=50.0, app_bytes=100),
+        ]
+        # Should execute cleanly without ZeroDivisionError
+        scored = score_candidates(candidates)
+        self.assertEqual(len(scored), 2)
+        self.assertEqual(scored[0][1], 0.0)
+        self.assertEqual(scored[1][1], 0.0)
+
+    def test_scenario_13_no_feasible_profiles_returns_useful_explanation(self):
+        """13. No feasible profiles: returns useful explanation rather than crashing."""
+        sender = _make_device("sender", security_requirement="high", cpu_level="low")
+        receiver = _make_device("receiver", security_requirement="high", cpu_level="low")
+        # Standard profile fails security, High profile fails cpu_level
+        c1 = _make_profile("C1", family="RSA", security_level="standard")
+        c2 = _make_profile("C2", family="RSA", security_level="high", minimum_cpu_level="high")
+
+        repo = _mock_bench_repo_for({
+            ("sender", "C1"): [_make_bench_doc("C1", "sender")],
+            ("receiver", "C1"): [_make_bench_doc("C1", "receiver")],
+            ("sender", "C2"): [_make_bench_doc("C2", "sender")],
+            ("receiver", "C2"): [_make_bench_doc("C2", "receiver")],
+        })
+        mock_prof_repo = MagicMock()
+        mock_prof_repo.list_enabled.return_value = [c1, c2]
+
+        with self.assertRaises(ValueError) as ctx:
+            select_best_profile_full(
+                sender=sender,
+                receiver=receiver,
+                message_size_bytes=64,
+                profile_repo=mock_prof_repo,
+                benchmark_repo=repo,
+                db=_no_op_db(),
+            )
+        err = str(ctx.exception)
+        self.assertIn("Failure category: no_profile_satisfies_constraints", err)
+        self.assertIn("Per-profile rejections:", err)
 
 
 if __name__ == "__main__":

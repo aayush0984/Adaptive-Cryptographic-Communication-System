@@ -37,8 +37,9 @@ class TestMongoDBIntegration(unittest.TestCase):
         devices = repo.list_active()
         self.assertGreaterEqual(len(devices), 2)
 
-        dev_a = repo.get_by_id("device_a")
-        self.assertEqual(dev_a.device_id, "device_a")
+        esp = repo.get_by_id("esp32")
+        self.assertIsNotNone(esp)
+        self.assertEqual(esp.device_id, "esp32")
 
 
 if __name__ == "__main__":

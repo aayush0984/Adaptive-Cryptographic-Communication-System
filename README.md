@@ -1,6 +1,8 @@
 # Adaptive Cryptographic Configuration Selection & Secure IoT Communication
 
-An adaptive security framework for Internet of Things (IoT) resource-constrained endpoints. The system dynamically evaluates candidate cryptographic profiles (AES-GCM, RSA-OAEP, ECDH/HKDF) against hardware constraints (RAM, CPU, security policy, latency limits) and benchmark performance evidence for both sender and receiver endpoints, selecting the optimal profile to encrypt and exchange messages over framed TCP.
+An adaptive security framework for Internet of Things (IoT) resource-constrained endpoints. The system dynamically evaluates candidate cryptographic profiles (AES-GCM, RSA-OAEP, ECDH/HKDF) against hardware constraints (RAM, CPU, security policy, packet size limits, latency limits) and benchmark performance evidence for both sender and receiver endpoints. It derives dynamic objective weights from endpoint pressures and message payload size, selecting the optimal profile to encrypt and exchange messages over framed TCP.
+
+For a detailed technical walkthrough of the architectural concepts, Stage 1/2 selection math, and complete end-to-end execution flow, see [SYSTEM_FLOW.md](file:///Users/aayushvivekraj/Developer/IoTEncryption/SYSTEM_FLOW.md).
 
 ---
 
@@ -18,8 +20,9 @@ An adaptive security framework for Internet of Things (IoT) resource-constrained
                                      v
 +-----------------------+   +-------------------+   +-----------------------+
 |  Device A (Sender)    |---| Adaptive Selector |---| Device B (Receiver)   |
-|  - RAM, CPU, Sec Req  |   | - Constraint filter|   | - RAM, CPU, Sec Req   |
-|  - User Plaintext     |   | - Scoring Engine  |   | - Decrypt & Echo      |
+|  - RAM, CPU, Sec Req  |   | Stage 1: Hard Filter  | - RAM, CPU, Sec Req   |
+|  - Power Source       |   | Stage 2: Dynamic  |   | - Power Source        |
+|  - User Plaintext     |   |   Weight & Score  |   | - Decrypt & Echo      |
 +-----------------------+   +---------+---------+   +-----------------------+
                                       |
                                       v
@@ -32,14 +35,28 @@ An adaptive security framework for Internet of Things (IoT) resource-constrained
 
 ---
 
-## Key Features (Phases 1–8 Implemented)
+## Key Features
 
-### 1. Multi-Engine Cryptographic Library (`crypto/`)
+### 1. Two-Stage Adaptive Selection System (`selection/`)
+- **Stage 1 — Mandatory Hard Filtering**: Checks mandatory constraints across both endpoints:
+  - Security Policy Floor (`standard` vs `high`)
+  - Minimum CPU Level (`low`, `medium`, `high`)
+  - Endpoint Memory Feasibility ($\text{RAM}_{\text{available}} \ge \text{Peak Memory}_{\text{predicted}}$)
+  - Combined Session Latency Limit ($\text{Latency}_{\text{predicted}} \le \text{Latency}_{\text{limit}}$)
+  - Maximum Packet Capacity ($\text{Overhead}_{\text{predicted}} \le \text{PacketLimit}$)
+  - Engine Implementation Verification
+- **Stage 2 — Dynamic Multi-Objective Optimization**: Derives dynamic normalized weights $(w_{\text{time}}, w_{\text{memory}}, w_{\text{comm}}, w_{\text{energy}})$ based on real-time scenario pressures:
+  - **Time Pressure ($P_{\text{time}}$)**: Derived from the strictest endpoint latency requirement via continuous logarithmic interpolation.
+  - **Memory Pressure ($P_{\text{memory}}$)**: Derived from the lowest available RAM between Device A and B.
+  - **Communication Pressure ($P_{\text{comm}}$)**: Derived from the UTF-8 payload byte size relative to effective packet limits.
+  - **Energy Pressure ($P_{\text{energy}}$)**: Derived strictly from endpoint power sources (`mains` vs `battery`), assigning elevated priority ($0.80$ to $0.95$) to battery-powered nodes without inferring battery percentage.
+
+### 2. Multi-Engine Cryptographic Library (`crypto/`)
 - **AES-GCM Engine** (`crypto/aes_engine.py`): AES-128-GCM & AES-256-GCM authenticated encryption with 96-bit nonces and 128-bit authentication tags.
 - **RSA Engine** (`crypto/rsa_engine.py`): RSA-OAEP key wrapping/unwrapping (2048-bit & 3072-bit keys) using SHA-256.
 - **ECC Engine** (`crypto/ecc_engine.py`): Ephemeral ECDH key exchange on NIST P-256 & P-384 curves, with HKDF-SHA256 session key derivation.
 
-### 2. Device & Profile Catalogues (`models/`, `repositories/`)
+### 3. Device & Profile Catalogues (`models/`, `repositories/`)
 - Hardware catalog with 10 device profiles (ESP32, Raspberry Pi 4, ESP8266, STM32, Jetson Nano, etc.).
 - 4 pre-configured Cryptographic Profiles (`C1` to `C4`):
   - `C1`: RSA-2048 + AES-128-GCM (Standard Security, Low Min-CPU)
@@ -47,21 +64,15 @@ An adaptive security framework for Internet of Things (IoT) resource-constrained
   - `C3`: ECDH-P256 + AES-128-GCM (Standard Security, Low Min-CPU)
   - `C4`: ECDH-P384 + AES-256-GCM (High Security, Medium Min-CPU)
 
-### 3. Performance Benchmarking Framework (`evaluation/`)
+### 4. Performance Benchmarking Framework (`evaluation/`)
 - Measures execution timings (`key_generation`, `key_establishment`, `encryption`, `decryption`, `total`) and peak heap memory (`tracemalloc`).
 - Distinguishes physical hardware measurements (`"measured"`) from local host development runs (`"simulated"`).
 - Stores reproducible raw runs in `iot_security.benchmarks` using MongoDB upserts.
 
-### 4. Adaptive Selection System (`selection/`)
-- **Independent Endpoint Filtering**: Checks security policy, minimum CPU level, peak memory, and latency constraints independently for sender and receiver.
-- **Nearest-Size Estimation**: Uses exact message size benchmark runs when available; falls back to nearest size estimation when necessary.
-- **Latency Optimization & Scoring**: Minimizes combined end-to-end latency with deterministic tie-breaking.
-- **Experiment Tracking**: Persists prediction blocks and candidate evaluations in `iot_security.experiments` (without logging plaintext).
-
 ### 5. Framed TCP Protocol & CLI (`communication/`, `client.py`, `server.py`)
 - Length-prefixed JSON protocol framing (`struct` binary header + UTF-8 payload).
 - Interactive CLI prompt flow for Device A, Device B, and user plaintext input.
-- Structured console output with `[SENDER]`, `[RECEIVER]`, `[SELECTOR]` status indicators.
+- Structured console output with `[SENDER]`, `[RECEIVER]`, `[SELECTOR]` status indicators and full explainability logs.
 
 ---
 
@@ -123,6 +134,7 @@ python client.py
 IoTEncryption/
 ├── client.py                    # Sender CLI & adaptive client workflow
 ├── server.py                    # Receiver TCP server & message verification
+├── SYSTEM_FLOW.md               # Detailed technical workflow & mathematical documentation
 ├── communication/               # Length-prefixed JSON protocol framing
 │   └── protocol.py
 ├── config/                      # Environment settings & profile loader
@@ -146,7 +158,7 @@ IoTEncryption/
 │   ├── device_repository.py
 │   ├── experiment_repository.py
 │   └── profile_repository.py
-├── selection/                   # Adaptive selection algorithm & compatibility
+├── selection/                   # Adaptive selection algorithm & dynamic weighting
 │   ├── compatibility.py
 │   ├── scoring.py
 │   └── selector.py
@@ -164,6 +176,6 @@ IoTEncryption/
 Run unit and integration tests using `pytest`:
 
 ```bash
-# Run unit selection, crypto, and protocol tests
+# Run unit selection, crypto, dynamic weighting, and protocol tests
 python -m pytest tests/unit/ -v
 ```

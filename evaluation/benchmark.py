@@ -414,12 +414,22 @@ if __name__ == "__main__":
     if not args.device and not args.all:
         parser.error("Either --device or --all must be specified.")
 
+    dev_repo = DeviceRepository()
     devices_to_run = []
     if args.all:
-        dev_repo = DeviceRepository()
         devices_to_run = [d.device_id for d in dev_repo.list_active()]
     else:
-        devices_to_run = [args.device]
+        # Validate that the requested device actually exists
+        dev = dev_repo.get_by_id(args.device)
+        if dev is None:
+            available = [d.device_id for d in dev_repo.list_active()]
+            parser.error(
+                f"Device '{args.device}' does not exist in the active device catalog. "
+                f"Available devices: {available}"
+            )
+        devices_to_run = [dev.device_id]
+
+    print(f"\nTarget device(s) for benchmarking ({len(devices_to_run)}): {devices_to_run}")
 
     for dev_id in devices_to_run:
         print(f"\nStarting benchmark suite for device '{dev_id}'")

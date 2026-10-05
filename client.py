@@ -151,6 +151,19 @@ def run_client(
         print(f"Benchmark Mode   : {mode_str}")
         print("============================================================\n")
 
+        # Explainability: Combined constraints & Dynamic weights
+        cc = selection.combined_constraints
+        cp = selection.constraint_pressures
+        dw = selection.dynamic_weights
+
+        if cp and dw:
+            print("[SELECTOR] Constraint Pressures & Dynamic Weights:")
+            print(f"  Time          : pressure = {cp.get('p_time', 0.0):.2f} -> weight = {dw.get('wt', 0.25)*100:.1f}%")
+            print(f"  Memory        : pressure = {cp.get('p_memory', 0.0):.2f} -> weight = {dw.get('wm', 0.25)*100:.1f}%")
+            print(f"  Communication : pressure = {cp.get('p_communication', 0.0):.2f} -> weight = {dw.get('wc', 0.25)*100:.1f}%")
+            print(f"  Energy        : pressure = {cp.get('p_energy', 0.0):.2f} -> weight = {dw.get('we', 0.25)*100:.1f}%")
+            print()
+
         # Show candidate evaluation summary
         print("[SELECTOR] Profile evaluations:")
         for detail in selection.candidate_details:
@@ -159,11 +172,12 @@ def run_client(
             sender_ms = detail.get("predicted_sender_total_ms")
             recv_ms = detail.get("predicted_receiver_total_ms")
             timing = (
-                f"predicted latency: {sender_ms + recv_ms:.2f}ms (sender {sender_ms:.2f}ms + receiver {recv_ms:.2f}ms)"
+                f"latency: {sender_ms + recv_ms:.2f}ms"
                 if sender_ms is not None and recv_ms is not None
-                else "no benchmark timing"
+                else "no timing"
             )
-            line = f"  [{detail['profile_id']}] {status:10s} | {timing}"
+            score_str = f"score: {detail['final_score']:.4f}" if "final_score" in detail else "unranked"
+            line = f"  [{detail['profile_id']}] {status:10s} | {timing} | {score_str}"
             if reasons:
                 line += f" | Rejections: {reasons}"
             print(line, flush=True)
