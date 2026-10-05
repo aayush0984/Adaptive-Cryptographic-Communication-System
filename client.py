@@ -104,50 +104,74 @@ def run_client(
         if experiment_id is None:
             experiment_id = f"exp-{uuid.uuid4().hex[:8]}"
 
-        print(
-            f"[client] Evaluating profiles: sender='{sender.name}' → receiver='{receiver.name}', "
-            f"message={message_size} B …",
-            flush=True,
-        )
+        print("\n============================================================")
+        print("ADAPTIVE CRYPTO SELECTION")
+        print("============================================================")
+        print(f"[SENDER] Sender       : {sender.name} ({sender.device_id})")
+        print(f"[SENDER] Receiver     : {receiver.name} ({receiver.device_id})")
+        print(f"[SENDER] Message size : {message_size} bytes")
+        print("[SENDER] Evaluating available crypto profiles...\n")
 
-        selection: SelectionResult = select_best_profile_full(
-            sender=sender,
-            receiver=receiver,
-            message_size_bytes=message_size,
-            experiment_id=experiment_id,
-        )
-
-        profile_id = selection.winning_profile.profile_id
-
-        # Display selection summary
-        print(f"[client] {selection.selection_reason}", flush=True)
-        if selection.is_demonstration_mode:
-            print(
-                "[client] [DEMO MODE] Local-computer benchmarks used; "
-                "feasibility applies to host machine, not physical boards.",
-                flush=True,
+        try:
+            selection: SelectionResult = select_best_profile_full(
+                sender=sender,
+                receiver=receiver,
+                message_size_bytes=message_size,
+                experiment_id=experiment_id,
             )
+        except ValueError as exc:
+            err_str = str(exc)
+            if "insufficient_benchmark_evidence" in err_str or "No benchmark data" in err_str:
+                print("No compatible crypto profile found.\n")
+                print("Reason:\nBenchmark data is missing for the selected devices.\n")
+                print("Generate development benchmark data using:")
+                print(f"python -m evaluation.benchmark --device {sender.device_id} --dry-run")
+                print(f"python -m evaluation.benchmark --device {receiver.device_id} --dry-run")
+                print("or:")
+                print("python -m evaluation.benchmark --all --dry-run\n")
+            raise
 
-        # Show candidate table
-        print("[client] Candidate profiles:", flush=True)
+        winning_prof = selection.winning_profile
+        profile_id = winning_prof.profile_id
+
+        sym_alg = winning_prof.symmetric_encryption.get("algorithm", "AES-GCM")
+        key_bits = winning_prof.symmetric_encryption.get("key_size_bits", 128)
+        enc_fmt = f"{sym_alg}-{key_bits}" if "AES" in sym_alg and str(key_bits) not in sym_alg else sym_alg
+
+        key_est_family = winning_prof.key_establishment.get("family", "N/A")
+        key_est_param = winning_prof.key_establishment.get("parameter", "")
+        key_est_str = f"{key_est_family} ({key_est_param})" if key_est_param else key_est_family
+
+        mode_str = "Simulated" if selection.is_demonstration_mode else "Measured"
+
+        print(f"Selected Profile : {profile_id} ({winning_prof.name})")
+        print(f"Encryption       : {enc_fmt}")
+        print(f"Key Exchange     : {key_est_str}")
+        print(f"Security Level   : {winning_prof.security_level.capitalize()}")
+        print(f"Benchmark Mode   : {mode_str}")
+        print("============================================================\n")
+
+        # Show candidate evaluation summary
+        print("[SELECTOR] Profile evaluations:")
         for detail in selection.candidate_details:
-            status = "✓ feasible" if detail["compatible"] else "✗ rejected"
+            status = "✓ FEASIBLE" if detail["compatible"] else "✗ REJECTED"
             reasons = "; ".join(detail["rejection_reasons"]) if detail["rejection_reasons"] else ""
             sender_ms = detail.get("predicted_sender_total_ms")
             recv_ms = detail.get("predicted_receiver_total_ms")
             timing = (
-                f"sender {sender_ms:.2f}ms + receiver {recv_ms:.2f}ms"
+                f"predicted latency: {sender_ms + recv_ms:.2f}ms (sender {sender_ms:.2f}ms + receiver {recv_ms:.2f}ms)"
                 if sender_ms is not None and recv_ms is not None
-                else "no timing data"
+                else "no benchmark timing"
             )
-            line = f"  {detail['profile_id']:4s}  {status}  [{timing}]"
+            line = f"  [{detail['profile_id']}] {status:10s} | {timing}"
             if reasons:
-                line += f"  reasons: {reasons}"
+                line += f" | Rejections: {reasons}"
             print(line, flush=True)
+        print()
     else:
         if experiment_id is None:
             experiment_id = f"exp-{uuid.uuid4().hex[:8]}"
-        print(f"[client] Using manually specified profile: {profile_id}", flush=True)
+        print(f"[SENDER] Using manually specified profile: {profile_id}", flush=True)
 
     # ── Step 8: TCP communication ────────────────────────────────────────────
     session = ProtocolSession(
@@ -155,9 +179,14 @@ def run_client(
         profile_id=profile_id,
         timeout_seconds=timeout_seconds,
     )
-    print(f"[client] Connecting to {host}:{port}", flush=True)
+    print("================ SECURE COMMUNICATION ================")
+    print(f"[SENDER] Original message: {message}")
+    print(f"[SENDER] Message size    : {message_size} bytes")
+    print(f"[SENDER] Connecting to receiver at {host}:{port}...")
+
     with socket.create_connection((host, port), timeout=timeout_seconds) as sock:
-        print(f"[client] Connected; experiment_id={session.experiment_id}", flush=True)
+        print(f"[SENDER] Connection established. Experiment ID: {session.experiment_id}")
+        print(f"[SENDER] Preparing protocol message frame (profile: {session.profile_id})...")
         hello = ProtocolMessage(
             protocol_version=1,
             message_type=MessageType.HELLO,
@@ -172,30 +201,25 @@ def run_client(
             },
         )
         send_frame_to_socket(sock, hello)
-        print(
-            f"[client] Sent HELLO (seq {hello.sequence_number}, profile {session.profile_id})",
-            flush=True,
-        )
+        print(f"[SENDER] Sent encrypted frame payload to {receiver.name}.")
+        print("[SENDER] Waiting for receiver acknowledgement...")
 
         reply = read_frame_from_socket(sock, timeout_seconds=timeout_seconds)
-        print(
-            f"[client] Received {reply.message_type.value} for experiment {reply.experiment_id}",
-            flush=True,
-        )
+        print(f"[SENDER] Received {reply.message_type.value.upper()} response frame from receiver.")
         if reply.message_type != MessageType.ACK:
             raise ValueError(f"Unexpected response from server: {reply.message_type}")
 
         # Verify the server echoed the exact message back
         echoed = reply.payload.get("received_message", "")
         recovered_ok = echoed == message
-        print(
-            f"[client] Server status: {reply.payload.get('status', 'unknown')}; "
-            f"message recovery: {'OK ✓' if recovered_ok else 'MISMATCH ✗'}",
-            flush=True,
-        )
+        print(f"[SENDER] Receiver processing status: {reply.payload.get('status', 'unknown')}")
+        print(f"[SENDER] Message integrity verification: {'PASSED ✓' if recovered_ok else 'FAILED ✗'}")
         if not recovered_ok:
-            print(f"[client] Expected: {message!r}", flush=True)
-            print(f"[client] Received: {echoed!r}", flush=True)
+            print(f"[SENDER] Expected: {message!r}")
+            print(f"[SENDER] Received: {echoed!r}")
+
+        print("[SENDER] Message sent and verified successfully.")
+        print("================ COMMUNICATION COMPLETE ================\n")
 
         # Persist observed result to experiments collection
         _record_observed_result(

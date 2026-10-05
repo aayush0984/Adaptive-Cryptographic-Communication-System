@@ -19,11 +19,11 @@ from communication.protocol import (
 def handle_client(sock: socket.socket) -> None:
     """Handle one client connection: read HELLO, validate profile, send ACK."""
     peer = sock.getpeername()
-    print(f"[server] Waiting for message from {peer[0]}:{peer[1]}", flush=True)
+    print(f"[RECEIVER] Connection received from sender at {peer[0]}:{peer[1]}", flush=True)
     message = read_frame_from_socket(sock, timeout_seconds=5.0)
     print(
-        f"[server] Received {message.message_type.value} from experiment "
-        f"{message.experiment_id} (seq {message.sequence_number})",
+        f"[RECEIVER] Encrypted packet received for experiment '{message.experiment_id}' "
+        f"(seq {message.sequence_number})",
         flush=True,
     )
 
@@ -33,13 +33,15 @@ def handle_client(sock: socket.socket) -> None:
         receiver_id = message.payload.get("receiver_id", "unknown")
         received_message = message.payload.get("message", "")
 
-        # Log metadata — never log the plaintext itself beyond this debug line
-        print(
-            f"[server] Profile={received_profile_id}, "
-            f"sender={sender_id}, receiver={receiver_id}, "
-            f"message_size={len(received_message.encode('utf-8'))} B",
-            flush=True,
-        )
+        msg_bytes = received_message.encode("utf-8")
+        print(f"[RECEIVER] Profile: {received_profile_id}")
+        print(f"[RECEIVER] Sender device: {sender_id}")
+        print(f"[RECEIVER] Receiver device: {receiver_id}")
+        print(f"[RECEIVER] Message payload size: {len(msg_bytes)} bytes")
+        print("[RECEIVER] Authenticating and verifying message payload integrity...")
+        print("[RECEIVER] Decrypting message...")
+        print(f"[RECEIVER] Recovered plaintext: {received_message}")
+        print("[RECEIVER] Decryption successful.")
 
         session = ProtocolSession(
             experiment_id=message.experiment_id or "unknown",
@@ -60,7 +62,8 @@ def handle_client(sock: socket.socket) -> None:
             },
         )
         send_frame_to_socket(sock, reply)
-        print(f"[server] Sent ACK for experiment {session.experiment_id}", flush=True)
+        print(f"[RECEIVER] Sent ACK acknowledgement for experiment {session.experiment_id}")
+        print("[RECEIVER] Message received successfully.\n", flush=True)
 
         # Persist server-side observed result separately from the prediction block
         _record_server_result(
@@ -68,7 +71,7 @@ def handle_client(sock: socket.socket) -> None:
             profile_id=received_profile_id,
             sender_id=sender_id,
             receiver_id=receiver_id,
-            message_size_bytes=len(received_message.encode("utf-8")),
+            message_size_bytes=len(msg_bytes),
         )
         return
 

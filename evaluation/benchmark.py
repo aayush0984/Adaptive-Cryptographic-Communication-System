@@ -32,7 +32,7 @@ from repositories.profile_repository import ProfileRepository
 # --------------------------------------------------------------------------- #
 
 #: Message sizes to benchmark (bytes)
-MESSAGE_SIZES: list[int] = [64, 1024, 10_240, 102_400]
+MESSAGE_SIZES: list[int] = [64, 1024, 10_240, 102_400, 1024_000]  # 64B, 1KB, 10KB, 100KB, 1MB
 
 #: Number of warm-up iterations (discarded)
 WARMUP_REPS: int = 3
@@ -221,6 +221,8 @@ def _run_single(
     finally:
         mem = stop_memory_tracking()
 
+    benchmark_mode = "simulated" if MEASUREMENT_SOURCE in ("local-computer", "estimated-scaled") else "measured"
+
     return {
         "run_id": str(uuid.uuid4()),
         "device_id": device_id,
@@ -232,6 +234,7 @@ def _run_single(
         "process_rss_kb": mem.process_rss_kb,
         "application_bytes": result["application_bytes"],
         "measurement_source": MEASUREMENT_SOURCE,
+        "benchmark_mode": benchmark_mode,
         "success": success,
         "error_message": error_message,
         "env_info": env_info,
@@ -301,11 +304,21 @@ def run_benchmark_suite(
                 reps_docs.append(doc)
 
             if col is not None:
-                try:
-                    col.insert_many(reps_docs, ordered=False)
-                except Exception as exc:
-                    if verbose:
-                        print(f"\n    [WARN] DB insert failed: {exc}")
+                for doc in reps_docs:
+                    try:
+                        col.update_one(
+                            {
+                                "device_id": doc["device_id"],
+                                "profile_id": doc["profile_id"],
+                                "message_size_bytes": doc["message_size_bytes"],
+                                "repetition": doc["repetition"],
+                            },
+                            {"$set": doc},
+                            upsert=True,
+                        )
+                    except Exception as exc:
+                        print(f"\n    [ERROR] DB upsert failed for device '{doc['device_id']}', profile '{doc['profile_id']}': {exc}", flush=True)
+                        raise
 
             all_docs.extend(reps_docs)
 
@@ -387,27 +400,40 @@ def aggregate_summary(
 
 if __name__ == "__main__":
     import argparse
+    from repositories.device_repository import DeviceRepository
 
     parser = argparse.ArgumentParser(description="Phase 6 — IoT Crypto Benchmarking")
-    parser.add_argument("--device", required=True, help="Device ID (e.g. esp32, raspberry_pi_4)")
+    parser.add_argument("--device", help="Device ID (e.g. esp32, raspberry_pi_4)")
+    parser.add_argument("--all", action="store_true", help="Benchmark all active devices in MongoDB catalog")
     parser.add_argument("--repetitions", type=int, default=DEFAULT_REPS)
     parser.add_argument("--message-sizes", nargs="+", type=int, default=None)
     parser.add_argument("--profiles", nargs="+", default=None, help="Profile IDs to benchmark (e.g. C1 C3)")
     parser.add_argument("--dry-run", action="store_true", help="Do not write results to MongoDB")
     args = parser.parse_args()
 
-    print(f"\nStarting benchmark suite for device '{args.device}'")
-    print(f"  Repetitions : {args.repetitions}")
-    print(f"  Message sizes: {args.message_sizes or MESSAGE_SIZES}")
-    print(f"  Dry run     : {args.dry_run}\n")
+    if not args.device and not args.all:
+        parser.error("Either --device or --all must be specified.")
 
-    run_benchmark_suite(
-        device_id=args.device,
-        repetitions=args.repetitions,
-        message_sizes=args.message_sizes,
-        profile_ids=args.profiles,
-        dry_run=args.dry_run,
-        verbose=True,
-    )
+    devices_to_run = []
+    if args.all:
+        dev_repo = DeviceRepository()
+        devices_to_run = [d.device_id for d in dev_repo.list_active()]
+    else:
+        devices_to_run = [args.device]
+
+    for dev_id in devices_to_run:
+        print(f"\nStarting benchmark suite for device '{dev_id}'")
+        print(f"  Repetitions : {args.repetitions}")
+        print(f"  Message sizes: {args.message_sizes or MESSAGE_SIZES}")
+        print(f"  Dry run     : {args.dry_run}\n")
+
+        run_benchmark_suite(
+            device_id=dev_id,
+            repetitions=args.repetitions,
+            message_sizes=args.message_sizes,
+            profile_ids=args.profiles,
+            dry_run=args.dry_run,
+            verbose=True,
+        )
 
     print("\nDone.")
