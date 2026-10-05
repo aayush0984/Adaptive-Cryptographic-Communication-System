@@ -82,6 +82,7 @@ def test_local_tcp_smoke_test_completes_hello_ack_exchange() -> None:
             experiment_id="smoke-test",
             profile_id="test-profile",
             message="direct client/server test",
+            non_interactive=True,  # skip interactive device/message prompts
         )
         server_thread.join(timeout=5)
 
