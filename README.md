@@ -181,7 +181,7 @@ All documents reside in the **`iot_security`** database:
 * **Phase 8 — Secure TCP Communication**: Framing protocol over TCP socket; encrypts user message with chosen profile, verifies HMAC/tag, and echoes verification.
 * **Phase 9 — Wireshark/TShark Packet Capture**: Independent capture monitor (`capture_monitor.py`) listening on loopback interface, recording wire traffic into timestamped `.pcapng` files and storing metadata in `traffic`.
 * **Phase 10 — PyShark Network Traffic Analysis**: Offline deep packet inspector (`analyze_traffic.py`) calculating directional packet counts, TCP payload size, retransmissions, and wire overhead percentage.
-* *(Phase 11 — Future Work: Multi-run comparative visual analytics and aggregate evaluation reporting).*
+* **(Phase 11 — Future Work**: Multi-run comparative visual analytics and aggregate evaluation reporting).*
 
 ---
 
@@ -214,8 +214,8 @@ pip install -r requirements.txt
 Create or verify `.env` in the project root:
 
 ```env
-MONGODB_URI=mongodb://localhost:27017/
-MONGODB_DB=iot_security
+MONGODB_URI=YOUR_DATABASE_URL
+MONGODB_DB=YOUR_DATABASE_NAME
 SERVER_HOST=127.0.0.1
 SERVER_PORT=5000
 CAPTURE_INTERFACE=lo0
