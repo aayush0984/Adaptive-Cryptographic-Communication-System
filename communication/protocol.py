@@ -9,8 +9,12 @@ import struct
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from enum import Enum
 from typing import Any
+
+# Indian Standard Time (IST = UTC+05:30)
+IST = ZoneInfo("Asia/Kolkata")
 
 SUPPORTED_PROTOCOL_VERSION = 1
 MAX_FRAME_SIZE = 1_048_576
@@ -270,7 +274,7 @@ def update_experiment_status(
 
     update_doc: dict[str, Any] = {
         "status": status,
-        "updated_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(IST),
     }
     if message is not None:
         update_doc["status_message"] = message

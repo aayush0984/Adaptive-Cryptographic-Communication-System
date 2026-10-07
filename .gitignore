@@ -50,8 +50,7 @@ htmlcov/
 *.tmp
 
 # Capture files (ignore binary captures)
-captures/raw/*.pcap
-captures/raw/*.pcapng
+captures/
 
 # Report outputs (ignore generated charts/tables but keep .gitkeep)
 reports/charts/*

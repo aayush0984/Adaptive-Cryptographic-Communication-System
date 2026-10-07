@@ -5,6 +5,10 @@ from __future__ import annotations
 import argparse
 import socket
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+# Indian Standard Time (IST = UTC+05:30)
+IST = ZoneInfo("Asia/Kolkata")
 
 from config import get_env
 from communication.protocol import (
@@ -116,7 +120,7 @@ def _record_server_result(
                         "sender_id": sender_id,
                         "receiver_id": receiver_id,
                         "message_size_bytes": message_size_bytes,
-                        "received_at": datetime.now(timezone.utc),
+                        "received_at": datetime.now(IST),
                     }
                 }
             },

@@ -7,7 +7,11 @@ import socket
 import sys
 import uuid
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
+
+# Indian Standard Time (IST = UTC+05:30)
+IST = ZoneInfo("Asia/Kolkata")
 
 from config import get_env
 from communication.protocol import (
@@ -187,66 +191,72 @@ def run_client(
             experiment_id = f"exp-{uuid.uuid4().hex[:8]}"
         print(f"[SENDER] Using manually specified profile: {profile_id}", flush=True)
 
-    # ── Step 8: TCP communication ────────────────────────────────────────────
+
     session = ProtocolSession(
         experiment_id=experiment_id,
         profile_id=profile_id,
         timeout_seconds=timeout_seconds,
     )
-    print("================ SECURE COMMUNICATION ================")
-    print(f"[SENDER] Original message: {message}")
-    print(f"[SENDER] Message size    : {message_size} bytes")
-    print(f"[SENDER] Connecting to receiver at {host}:{port}...")
 
-    with socket.create_connection((host, port), timeout=timeout_seconds) as sock:
-        print(f"[SENDER] Connection established. Experiment ID: {session.experiment_id}")
-        print(f"[SENDER] Preparing protocol message frame (profile: {session.profile_id})...")
-        hello = ProtocolMessage(
-            protocol_version=1,
-            message_type=MessageType.HELLO,
-            experiment_id=session.experiment_id,
-            session_id=session.experiment_id,
-            profile_id=session.profile_id,
-            sequence_number=session.next_sequence(),
-            payload={
-                "message": message,  # user's exact plaintext
-                "sender_id": sender.device_id,
-                "receiver_id": receiver.device_id,
-            },
-        )
-        send_frame_to_socket(sock, hello)
-        print(f"[SENDER] Sent encrypted frame payload to {receiver.name}.")
-        print("[SENDER] Waiting for receiver acknowledgement...")
+    def _execute_communication() -> ProtocolMessage:
+        print("================ SECURE COMMUNICATION ================")
+        print(f"[SENDER] Original message: {message}")
+        print(f"[SENDER] Message size    : {message_size} bytes")
+        print(f"[SENDER] Connecting to receiver at {host}:{port}...")
 
-        reply = read_frame_from_socket(sock, timeout_seconds=timeout_seconds)
-        print(f"[SENDER] Received {reply.message_type.value.upper()} response frame from receiver.")
-        if reply.message_type != MessageType.ACK:
-            raise ValueError(f"Unexpected response from server: {reply.message_type}")
+        with socket.create_connection((host, port), timeout=timeout_seconds) as sock:
+            print(f"[SENDER] Connection established. Experiment ID: {session.experiment_id}")
+            print(f"[SENDER] Preparing protocol message frame (profile: {session.profile_id})...")
+            hello = ProtocolMessage(
+                protocol_version=1,
+                message_type=MessageType.HELLO,
+                experiment_id=session.experiment_id,
+                session_id=session.experiment_id,
+                profile_id=session.profile_id,
+                sequence_number=session.next_sequence(),
+                payload={
+                    "message": message,  # user's exact plaintext
+                    "sender_id": sender.device_id,
+                    "receiver_id": receiver.device_id,
+                },
+            )
+            send_frame_to_socket(sock, hello)
+            print(f"[SENDER] Sent encrypted frame payload to {receiver.name}.")
+            print("[SENDER] Waiting for receiver acknowledgement...")
 
-        # Verify the server echoed the exact message back
-        echoed = reply.payload.get("received_message", "")
-        recovered_ok = echoed == message
-        print(f"[SENDER] Receiver processing status: {reply.payload.get('status', 'unknown')}")
-        print(f"[SENDER] Message integrity verification: {'PASSED ✓' if recovered_ok else 'FAILED ✗'}")
-        if not recovered_ok:
-            print(f"[SENDER] Expected: {message!r}")
-            print(f"[SENDER] Received: {echoed!r}")
+            reply = read_frame_from_socket(sock, timeout_seconds=timeout_seconds)
+            print(f"[SENDER] Received {reply.message_type.value.upper()} response frame from receiver.")
+            if reply.message_type != MessageType.ACK:
+                raise ValueError(f"Unexpected response from server: {reply.message_type}")
 
-        print("[SENDER] Message sent and verified successfully.")
-        print("================ COMMUNICATION COMPLETE ================\n")
+            # Verify the server echoed the exact message back
+            echoed = reply.payload.get("received_message", "")
+            recovered_ok = echoed == message
+            print(f"[SENDER] Receiver processing status: {reply.payload.get('status', 'unknown')}")
+            print(f"[SENDER] Message integrity verification: {'PASSED ✓' if recovered_ok else 'FAILED ✗'}")
+            if not recovered_ok:
+                print(f"[SENDER] Expected: {message!r}")
+                print(f"[SENDER] Received: {echoed!r}")
 
-        # Persist observed result to experiments collection
-        _record_observed_result(
-            experiment_id=experiment_id,
-            profile_id=profile_id,
-            message_size_bytes=message_size,
-            sender_id=sender.device_id,
-            receiver_id=receiver.device_id,
-            recovered_ok=recovered_ok,
-            server_status=reply.payload.get("status", "unknown"),
-        )
+            print("[SENDER] Message sent and verified successfully.")
+            print("================ COMMUNICATION COMPLETE ================\n")
 
-        return reply
+            # Persist observed result to experiments collection
+            _record_observed_result(
+                experiment_id=experiment_id,
+                profile_id=profile_id,
+                message_size_bytes=message_size,
+                sender_id=sender.device_id,
+                receiver_id=receiver.device_id,
+                recovered_ok=recovered_ok,
+                server_status=reply.payload.get("status", "unknown"),
+            )
+
+            return reply
+
+    reply = _execute_communication()
+
+    return reply
 
 
 def _record_observed_result(
@@ -278,7 +288,7 @@ def _record_observed_result(
                         "receiver_id": receiver_id,
                         "server_status": server_status,
                         "message_recovered": recovered_ok,
-                        "observed_at": datetime.now(timezone.utc),
+                        "observed_at": datetime.now(IST),
                     },
                     "status": "completed" if recovered_ok else "failed",
                 }
@@ -319,6 +329,7 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Bypass interactive prompts and use defaults/CLI flags",
     )
+
     return parser.parse_args()
 
 
@@ -335,6 +346,7 @@ if __name__ == "__main__":
             message=args.message,
             timeout_seconds=args.timeout,
             non_interactive=args.non_interactive,
+
         )
         # Print only status — do not echo plaintext in final output
         print(

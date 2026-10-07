@@ -40,7 +40,11 @@ from __future__ import annotations
 import sys
 import uuid
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Tuple
+
+# Indian Standard Time (IST = UTC+05:30)
+IST = ZoneInfo("Asia/Kolkata")
 
 from models.device import Device
 from models.crypto_profile import CryptoProfile
@@ -498,7 +502,7 @@ def _persist_experiment(
             "failure_category": failure_category,
             "status": status,
             "is_demonstration_mode": is_demonstration_mode,
-            "selected_at": datetime.now(timezone.utc),
+            "selected_at": datetime.now(IST),
         }
 
         db["experiments"].update_one(
