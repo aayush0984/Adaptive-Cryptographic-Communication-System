@@ -33,9 +33,10 @@ def create_indexes(db: Database[dict[str, Any]] | None = None) -> dict[str, list
     exp_idx1 = experiments_col.create_index([("created_at", -1), ("status", 1)])
     created["experiments"] = [exp_idx1]
 
-    # traffic_captures collection indexes (Phase 9)
-    captures_col = database["traffic_captures"]
+    # traffic collection indexes (Phase 9 & Phase 10)
+    captures_col = database["traffic"]
     cap_idx1 = captures_col.create_index("experiment_id", unique=True)
-    created["traffic_captures"] = [cap_idx1]
+    cap_idx2 = captures_col.create_index("traffic_analysis.analysis_status")
+    created["traffic"] = [cap_idx1, cap_idx2]
 
     return created

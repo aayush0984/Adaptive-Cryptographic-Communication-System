@@ -496,7 +496,7 @@ class PacketCapture:
     # ── MongoDB metadata ─────────────────────────────────────────────────────
 
     def metadata(self) -> dict[str, Any]:
-        """Return a dict suitable for storing in the ``traffic_captures`` collection.
+        """Return a dict suitable for storing in the ``traffic`` collection.
 
         Fields are chosen to be useful to Phase 10 (PyShark analysis) without
         storing sensitive cryptographic secrets.
@@ -506,6 +506,7 @@ class PacketCapture:
             "profile_id": self.profile_id,
             "device_a_id": self.device_a_id,
             "device_b_id": self.device_b_id,
+            "message_size_bytes": self.message_size_bytes,
             "capture_file": self.capture_file,
             "capture_interface": self.interface,
             "capture_filter": self.capture_filter,
@@ -535,9 +536,9 @@ class PacketCapture:
         return info
 
     def persist_to_db(self) -> None:
-        """Write Phase 9 capture metadata into the dedicated ``traffic_captures`` MongoDB collection.
+        """Write Phase 9 capture metadata into the dedicated ``traffic`` MongoDB collection.
 
-        Creates one traffic_captures document per capture/experiment, linked using experiment_id.
+        Creates one traffic document per capture/experiment, linked using experiment_id.
         Also retains a reference in experiments collection if existing experiment doc exists.
         """
         try:
@@ -545,8 +546,8 @@ class PacketCapture:
             db = get_database()
             meta = self.metadata()
 
-            # Store in dedicated iot_security.traffic_captures collection
-            db["traffic_captures"].update_one(
+            # Store in dedicated iot_security.traffic collection
+            db["traffic"].update_one(
                 {"experiment_id": self.experiment_id},
                 {"$set": meta},
                 upsert=True,

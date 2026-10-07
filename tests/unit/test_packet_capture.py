@@ -384,7 +384,7 @@ class TestPacketCaptureMetadata:
         # Even before start/stop, the path should be project-relative
         assert not Path(cap.capture_file).is_absolute()
 
-    def test_persist_to_db_writes_to_traffic_captures(self) -> None:
+    def test_persist_to_db_writes_to_traffic(self) -> None:
         cap = PacketCapture(
             "exp-db-test",
             "ECC-P256",
@@ -395,7 +395,7 @@ class TestPacketCaptureMetadata:
         traffic_mock = MagicMock()
         experiments_mock = MagicMock()
         mock_db = {
-            "traffic_captures": traffic_mock,
+            "traffic": traffic_mock,
             "experiments": experiments_mock,
         }
         mock_get_db = MagicMock(return_value=mock_db)
