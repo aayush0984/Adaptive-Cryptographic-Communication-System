@@ -49,7 +49,10 @@ htmlcov/
 *.bak
 *.tmp
 
-# Capture files (ignore binary captures)
+# Phase-wise plans
+plan/
+
+# Capture files
 captures/
 
 # Report outputs (ignore generated charts/tables but keep .gitkeep)
