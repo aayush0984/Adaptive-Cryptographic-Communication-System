@@ -5,7 +5,10 @@ stores reproducible raw observations in ``iot_security.benchmarks``, and
 provides summary/aggregation helpers.
 
 Usage (CLI):
+    python -m evaluation.benchmark --all
     python -m evaluation.benchmark --device esp32 --repetitions 30
+    python -m evaluation.benchmark --all --profiles C5
+    python -m evaluation.benchmark --all --profiles C1 C2 C3
 
 Usage (programmatic):
     from evaluation.benchmark import run_benchmark_suite
@@ -183,6 +186,47 @@ def _benchmark_ecc_profile(
     }
 
 
+def _benchmark_psk_profile(
+    profile: Any,
+    message: bytes,
+) -> dict[str, float]:
+    """Time PSK encryption and decryption (AES-128-GCM)."""
+    from crypto import psk_engine
+
+    psk_key = psk_engine.get_psk_key()
+
+    # Pre-shared key: key generation and key establishment over wire are 0.0 ms
+    key_gen_ms = 0.0
+    key_est_ms = 0.0
+
+    # ---- AES encryption ----
+    plaintext = message.decode("latin-1")
+    t0 = time.perf_counter_ns()
+    ciphertext, nonce = psk_engine.encrypt_with_psk(plaintext, psk_key)
+    enc_ms = _ns_to_ms(time.perf_counter_ns() - t0)
+
+    # ---- AES decryption ----
+    t0 = time.perf_counter_ns()
+    _ = psk_engine.decrypt_with_psk(ciphertext, nonce, psk_key)
+    dec_ms = _ns_to_ms(time.perf_counter_ns() - t0)
+
+    total_ms = round(key_gen_ms + key_est_ms + enc_ms + dec_ms, 6)
+
+    # application bytes = nonce (12) + ciphertext (includes 16-byte auth tag)
+    app_bytes = len(nonce) + len(ciphertext)
+
+    return {
+        "timings_ms": {
+            "key_generation": key_gen_ms,
+            "key_establishment": key_est_ms,
+            "encryption": enc_ms,
+            "decryption": dec_ms,
+            "total": total_ms,
+        },
+        "application_bytes": app_bytes,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Single-run record                                                             #
 # --------------------------------------------------------------------------- #
@@ -201,8 +245,12 @@ def _run_single(
     try:
         if family == "RSA":
             result = _benchmark_rsa_profile(profile, message)
-        else:  # ECC
+        elif family == "ECC":
             result = _benchmark_ecc_profile(profile, message)
+        elif family == "PSK":
+            result = _benchmark_psk_profile(profile, message)
+        else:
+            raise ValueError(f"Unsupported key establishment family: {family}")
         success = True
         error_message = None
     except Exception as exc:

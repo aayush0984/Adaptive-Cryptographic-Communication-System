@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-ALLOWED_SECURITY_LEVELS = {"standard", "high"}
+ALLOWED_SECURITY_LEVELS = {"basic", "standard", "high"}
 ALLOWED_CPU_LEVELS = {"low", "medium", "high"}
-ALLOWED_KEY_FAMILIES = {"RSA", "ECC"}
+ALLOWED_KEY_FAMILIES = {"RSA", "ECC", "PSK"}
 
 
 class ProfileValidationError(ValueError):

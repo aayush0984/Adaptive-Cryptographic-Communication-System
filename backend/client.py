@@ -153,6 +153,8 @@ def run_client(
         print(f"Key Exchange     : {key_est_str}")
         print(f"Security Level   : {winning_prof.security_level.capitalize()}")
         print(f"Benchmark Mode   : {mode_str}")
+        if selection.fallback_used:
+            print(f"Selection Mode   : FALLBACK (relaxed: {', '.join(selection.relaxed_constraints)})")
         print("============================================================\n")
 
         # Explainability: Combined constraints & Dynamic weights
@@ -207,6 +209,19 @@ def run_client(
         with socket.create_connection((host, port), timeout=timeout_seconds) as sock:
             print(f"[SENDER] Connection established. Experiment ID: {session.experiment_id}")
             print(f"[SENDER] Preparing protocol message frame (profile: {session.profile_id})...")
+
+            payload: dict[str, Any] = {
+                "message": message,  # user's exact plaintext
+                "sender_id": sender.device_id,
+                "receiver_id": receiver.device_id,
+            }
+            if session.profile_id == "C5":
+                from crypto.psk_engine import encrypt_with_psk
+                ciphertext, nonce = encrypt_with_psk(message)
+                payload["ciphertext_hex"] = ciphertext.hex()
+                payload["nonce_hex"] = nonce.hex()
+                print(f"[SENDER] Encrypted payload using Pre-Shared Key (PSK) + AES-128-GCM.")
+
             hello = ProtocolMessage(
                 protocol_version=1,
                 message_type=MessageType.HELLO,
@@ -214,11 +229,7 @@ def run_client(
                 session_id=session.experiment_id,
                 profile_id=session.profile_id,
                 sequence_number=session.next_sequence(),
-                payload={
-                    "message": message,  # user's exact plaintext
-                    "sender_id": sender.device_id,
-                    "receiver_id": receiver.device_id,
-                },
+                payload=payload,
             )
             send_frame_to_socket(sock, hello)
             print(f"[SENDER] Sent encrypted frame payload to {receiver.name}.")

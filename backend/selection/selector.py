@@ -54,6 +54,7 @@ from selection.compatibility import (
     CompatibilityResult,
     InsufficientEvidenceError,
     check_profile_compatibility_detailed,
+    check_c5_technical_feasibility,
 )
 from selection.scoring import (
     derive_dynamic_weights,
@@ -91,6 +92,14 @@ class SelectionResult:
         Calculated constraint pressures {'p_time': ..., 'p_memory': ..., 'p_communication': ..., 'p_energy': ...}.
     combined_constraints : dict
         Combined constraint summary for Device A and Device B.
+    selection_mode : str
+        'normal' for standard adaptive selection, 'fallback' for C5 fallback.
+    fallback_used : bool
+        True when fallback profile C5 was activated.
+    fallback_reason : str | None
+        Reason why fallback was activated (e.g. 'no_profile_satisfies_constraints').
+    relaxed_constraints : list[str]
+        List of constraints relaxed during selection (e.g. ['security_requirement']).
     """
 
     def __init__(
@@ -105,6 +114,10 @@ class SelectionResult:
         dynamic_weights: Optional[Dict[str, float]] = None,
         constraint_pressures: Optional[Dict[str, float]] = None,
         combined_constraints: Optional[Dict[str, Any]] = None,
+        selection_mode: str = "normal",
+        fallback_used: bool = False,
+        fallback_reason: Optional[str] = None,
+        relaxed_constraints: Optional[List[str]] = None,
     ) -> None:
         self.winning_profile = winning_profile
         self.winning_bench_doc = winning_bench_doc
@@ -116,6 +129,10 @@ class SelectionResult:
         self.dynamic_weights = dynamic_weights or {}
         self.constraint_pressures = constraint_pressures or {}
         self.combined_constraints = combined_constraints or {}
+        self.selection_mode = selection_mode
+        self.fallback_used = fallback_used
+        self.fallback_reason = fallback_reason
+        self.relaxed_constraints = relaxed_constraints or []
 
 
 # ---------------------------------------------------------------------------
@@ -262,12 +279,17 @@ def select_best_profile_full(
             message_size_bytes=message_size_bytes,
         )
 
-    # ── STAGE 1: Hard filtering on every enabled profile ─────────────────────
+    # ── STAGE 1: Hard filtering on standard profiles (C1-C4) ─────────────────
+    # C5 is fallback-only and must NEVER participate in normal filtering/scoring.
+    standard_profiles = [p for p in enabled_profiles if p.profile_id != "C5"]
+    if not standard_profiles:
+        raise ValueError("No active standard crypto profiles found in the 'crypto_profiles' collection.")
+
     feasible_pairs: List[Tuple[CryptoProfile, CompatibilityResult]] = []
     candidate_details: List[Dict[str, Any]] = []
     any_demo = False
 
-    for profile in enabled_profiles:
+    for profile in standard_profiles:
         compat = check_profile_compatibility_detailed(
             sender=sender,
             receiver=receiver,
@@ -315,24 +337,143 @@ def select_best_profile_full(
         if compat.compatible and compat.sender_evidence is not None:
             feasible_pairs.append((profile, compat))
 
-    # ── STAGE 1 failure: No feasible profile ─────────────────────────────────
+    # ── STAGE 1 failure on standard profiles: Activate C5 fallback ───────────
     if not feasible_pairs:
         all_reasons = {d["profile_id"]: d["rejection_reasons"] for d in candidate_details}
-        insufficient = [
-            pid for pid, reasons in all_reasons.items()
-            if any("insufficient benchmark evidence" in r for r in reasons)
-        ]
-        no_constraint = [
-            pid for pid, reasons in all_reasons.items()
-            if reasons and not any("insufficient benchmark evidence" in r for r in reasons)
-        ]
 
-        if insufficient and not no_constraint:
-            failure_category = "insufficient_benchmark_evidence"
-        elif not insufficient:
+        try:
+            c5_profile = profile_repo.get_by_id("C5")
+            if not isinstance(c5_profile, CryptoProfile):
+                raise KeyError("Profile 'C5' not found or invalid in repository")
+        except Exception as exc:
             failure_category = "no_profile_satisfies_constraints"
-        else:
-            failure_category = "mixed_evidence_and_constraint_failures"
+            _persist_experiment(
+                db=db,
+                experiment_id=experiment_id,
+                sender=sender,
+                receiver=receiver,
+                message_size_bytes=message_size_bytes,
+                candidate_details=candidate_details,
+                status="failed",
+                failure_category=failure_category,
+                selected_profile_id=None,
+                selection_reason=None,
+                is_demonstration_mode=any_demo,
+                dynamic_weights=final_weights,
+                constraint_pressures=pressures,
+                combined_constraints=combined_constraints,
+            )
+            raise ValueError(
+                f"No crypto profile satisfies sender and receiver constraints. "
+                f"Failure category: {failure_category}. "
+                f"Per-profile rejections: {all_reasons}"
+            ) from exc
+
+        print("[selector] No standard crypto profile satisfies all constraints.", flush=True)
+        print("[selector] Activating fallback profile C5.", flush=True)
+        print("[selector] WARNING: Security requirement has been relaxed.", flush=True)
+
+        # Check technical feasibility for fallback profile C5
+        c5_compat = check_c5_technical_feasibility(
+            sender=sender,
+            receiver=receiver,
+            profile=c5_profile,
+            message_size=message_size_bytes,
+            benchmark_repo=benchmark_repo,
+        )
+
+        sender_run_id = (
+            c5_compat.sender_evidence.doc.get("run_id") if c5_compat.sender_evidence else None
+        )
+        receiver_run_id = (
+            c5_compat.receiver_evidence.doc.get("run_id") if c5_compat.receiver_evidence else None
+        )
+        sender_src = (
+            c5_compat.sender_evidence.doc.get("measurement_source") if c5_compat.sender_evidence else "fallback-default"
+        )
+        receiver_src = (
+            c5_compat.receiver_evidence.doc.get("measurement_source") if c5_compat.receiver_evidence else "fallback-default"
+        )
+
+        c5_detail: Dict[str, Any] = {
+            "profile_id": c5_profile.profile_id,
+            "profile_name": c5_profile.name,
+            "security_level": c5_profile.security_level,
+            "compatible": c5_compat.compatible,
+            "rejection_reasons": c5_compat.rejection_reasons,
+            "estimation_notes": c5_compat.estimation_notes,
+            "is_demonstration_mode": c5_compat.is_demonstration_mode,
+            "sender_evidence_run_id": sender_run_id,
+            "receiver_evidence_run_id": receiver_run_id,
+            "sender_measurement_source": sender_src,
+            "receiver_measurement_source": receiver_src,
+            "predicted_sender_total_ms": c5_compat.predicted_sender_total_ms,
+            "predicted_receiver_total_ms": c5_compat.predicted_receiver_total_ms,
+            "predicted_sender_peak_kb": c5_compat.predicted_sender_peak_kb,
+            "predicted_receiver_peak_kb": c5_compat.predicted_receiver_peak_kb,
+            "predicted_application_bytes": c5_compat.predicted_application_bytes,
+            "timing_breakdown": c5_compat.timing_breakdown,
+        }
+        candidate_details.append(c5_detail)
+
+        if not c5_compat.compatible:
+            failure_category = "fallback_profile_not_feasible"
+            _persist_experiment(
+                db=db,
+                experiment_id=experiment_id,
+                sender=sender,
+                receiver=receiver,
+                message_size_bytes=message_size_bytes,
+                candidate_details=candidate_details,
+                status="failed",
+                failure_category=failure_category,
+                selected_profile_id=None,
+                selection_reason=None,
+                is_demonstration_mode=any_demo or c5_compat.is_demonstration_mode,
+                dynamic_weights=final_weights,
+                constraint_pressures=pressures,
+                combined_constraints=combined_constraints,
+                selection_mode="fallback",
+                fallback_used=True,
+                fallback_reason="no_profile_satisfies_constraints",
+                relaxed_constraints=["security_requirement"],
+            )
+            raise ValueError(
+                f"No standard profile satisfies all constraints, and fallback profile 'C5' is not feasible. "
+                f"Failure category: {failure_category}. "
+                f"Technical failure reasons: {c5_compat.rejection_reasons}. "
+                f"Standard profile rejections: {all_reasons}"
+            )
+
+        # C5 fallback successful!
+        print(f"[selector] Selected: {c5_profile.profile_id} - {c5_profile.name}", flush=True)
+        print("[selector] Selection mode: FALLBACK", flush=True)
+
+        selection_reason = (
+            f"Fallback profile '{c5_profile.profile_id}' ({c5_profile.name}) activated: "
+            f"no standard profile satisfied all constraints. Security requirement was relaxed as soft constraint; "
+            f"technical constraints (AES-128-GCM capability) verified."
+        )
+
+        c5_bench_doc = (
+            c5_compat.sender_evidence.doc
+            if c5_compat.sender_evidence
+            else {
+                "device_id": sender.device_id,
+                "profile_id": "C5",
+                "message_size_bytes": message_size_bytes,
+                "measurement_source": "fallback-default",
+                "timings_ms": {
+                    "key_generation": 0.0,
+                    "key_establishment": 0.0,
+                    "encryption": c5_compat.predicted_sender_total_ms or 0.01,
+                    "decryption": c5_compat.predicted_receiver_total_ms or 0.01,
+                    "total": (c5_compat.predicted_sender_total_ms or 0.01) + (c5_compat.predicted_receiver_total_ms or 0.01),
+                },
+                "peak_memory_kb": c5_compat.predicted_sender_peak_kb or 2.0,
+                "application_bytes": c5_compat.predicted_application_bytes or (message_size_bytes + 28),
+            }
+        )
 
         _persist_experiment(
             db=db,
@@ -341,21 +482,35 @@ def select_best_profile_full(
             receiver=receiver,
             message_size_bytes=message_size_bytes,
             candidate_details=candidate_details,
-            status="failed",
-            failure_category=failure_category,
-            selected_profile_id=None,
-            selection_reason=None,
-            is_demonstration_mode=any_demo,
+            status="selected",
+            failure_category=None,
+            selected_profile_id=c5_profile.profile_id,
+            selection_reason=selection_reason,
+            is_demonstration_mode=any_demo or c5_compat.is_demonstration_mode,
             dynamic_weights=final_weights,
             constraint_pressures=pressures,
             combined_constraints=combined_constraints,
+            selection_mode="fallback",
+            fallback_used=True,
+            fallback_reason="no_profile_satisfies_constraints",
+            relaxed_constraints=["security_requirement"],
         )
-        raise ValueError(
-            f"No compatible crypto profile found "
-            f"(sender='{sender.device_id}', receiver='{receiver.device_id}', "
-            f"message={message_size_bytes} B). "
-            f"Failure category: {failure_category}. "
-            f"Per-profile rejections: {all_reasons}"
+
+        return SelectionResult(
+            winning_profile=c5_profile,
+            winning_bench_doc=c5_bench_doc,
+            winning_score=0.0,
+            experiment_id=experiment_id,
+            candidate_details=candidate_details,
+            is_demonstration_mode=any_demo or c5_compat.is_demonstration_mode,
+            selection_reason=selection_reason,
+            dynamic_weights=final_weights,
+            constraint_pressures=pressures,
+            combined_constraints=combined_constraints,
+            selection_mode="fallback",
+            fallback_used=True,
+            fallback_reason="no_profile_satisfies_constraints",
+            relaxed_constraints=["security_requirement"],
         )
 
     # ── STAGE 2: Dynamic optimization & scoring ──────────────────────────────
@@ -460,6 +615,10 @@ def _persist_experiment(
     dynamic_weights: Optional[Dict[str, float]] = None,
     constraint_pressures: Optional[Dict[str, float]] = None,
     combined_constraints: Optional[Dict[str, Any]] = None,
+    selection_mode: str = "normal",
+    fallback_used: bool = False,
+    fallback_reason: Optional[str] = None,
+    relaxed_constraints: Optional[List[str]] = None,
 ) -> None:
     """Upsert the selection record into the experiments collection."""
     try:
@@ -497,7 +656,12 @@ def _persist_experiment(
                 "subject to mandatory security and resource constraints."
             ),
             "candidate_profiles": candidate_details,
+            "selected_profile": selected_profile_id,
             "selected_profile_id": selected_profile_id,
+            "selection_mode": selection_mode,
+            "fallback_used": fallback_used,
+            "fallback_reason": fallback_reason,
+            "relaxed_constraints": relaxed_constraints or [],
             "selection_reason": selection_reason,
             "failure_category": failure_category,
             "status": status,

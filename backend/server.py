@@ -36,6 +36,12 @@ def handle_client(sock: socket.socket) -> None:
         sender_id = message.payload.get("sender_id", "unknown")
         receiver_id = message.payload.get("receiver_id", "unknown")
         received_message = message.payload.get("message", "")
+        if received_profile_id == "C5" and "ciphertext_hex" in message.payload and "nonce_hex" in message.payload:
+            from crypto.psk_engine import decrypt_with_psk
+            ciphertext = bytes.fromhex(message.payload["ciphertext_hex"])
+            nonce = bytes.fromhex(message.payload["nonce_hex"])
+            print("[RECEIVER] Authenticating and decrypting PSK ciphertext using AES-128-GCM...")
+            received_message = decrypt_with_psk(ciphertext, nonce)
 
         msg_bytes = received_message.encode("utf-8")
         print(f"[RECEIVER] Profile: {received_profile_id}")

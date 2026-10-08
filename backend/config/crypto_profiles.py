@@ -42,4 +42,6 @@ def filter_profiles_by_security(
 
     if min_security_level == "high":
         return [p for p in profiles if p.security_level == "high"]
-    return [p for p in profiles if p.security_level in ("standard", "high")]
+    if min_security_level == "standard":
+        return [p for p in profiles if p.security_level in ("standard", "high")]
+    return [p for p in profiles if p.security_level in ("basic", "standard", "high")]

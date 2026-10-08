@@ -46,13 +46,13 @@ from repositories.benchmark_repository import BenchmarkRepository
 # ---------------------------------------------------------------------------
 
 # Ordered security levels: higher index = higher security
-_SECURITY_ORDER: Dict[str, int] = {"standard": 0, "high": 1}
+_SECURITY_ORDER: Dict[str, int] = {"basic": -1, "standard": 0, "high": 1}
 
 # Ordered CPU levels
 _CPU_ORDER: Dict[str, int] = {"low": 0, "medium": 1, "high": 2}
 
 # Profiles actually implemented in this repository (family → engine available)
-_IMPLEMENTED_FAMILIES = frozenset({"RSA", "ECC"})
+_IMPLEMENTED_FAMILIES = frozenset({"RSA", "ECC", "PSK"})
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +401,151 @@ def check_profile_compatibility_detailed(
     # ── Result ───────────────────────────────────────────────────────────────
     app_bytes = sender_evidence.doc.get("application_bytes", 0)
     breakdown = dict(sender_evidence.doc.get("timings_ms", {}))
+
+    return CompatibilityResult(
+        compatible=len(reasons) == 0,
+        rejection_reasons=reasons,
+        sender_evidence=sender_evidence,
+        receiver_evidence=receiver_evidence,
+        predicted_sender_total_ms=sender_total_ms,
+        predicted_receiver_total_ms=receiver_total_ms,
+        predicted_sender_peak_kb=sender_peak_kb,
+        predicted_receiver_peak_kb=receiver_peak_kb,
+        predicted_application_bytes=app_bytes,
+        timing_breakdown=breakdown,
+        estimation_notes=estimation_notes,
+        is_demonstration_mode=is_demo,
+    )
+
+
+def check_c5_technical_feasibility(
+    sender: Device,
+    receiver: Device,
+    profile: CryptoProfile,
+    message_size: int,
+    benchmark_repo: BenchmarkRepository,
+) -> CompatibilityResult:
+    """Evaluate whether fallback profile C5 is technically feasible for (sender, receiver).
+
+    Key rules for fallback:
+    - Security requirement is a SOFT constraint (relaxed): high security devices accept basic C5.
+    - Technical constraints are HARD constraints:
+      1. Implementation check: profile family ('PSK') must be implemented.
+      2. Both endpoints must actually support AES-128-GCM in their supported_algorithms.
+      3. Both endpoints must satisfy the profile's minimum CPU level (low).
+      4. Memory feasibility: endpoints must have enough RAM to perform AES-128-GCM.
+      5. Packet MTU: application bytes (message + 12B nonce + 16B tag) must fit within MTUs.
+      6. Latency feasibility: predicted latency must not exceed device limits if benchmarked.
+    """
+    reasons: List[str] = []
+    estimation_notes: List[str] = []
+    is_demo = False
+
+    # 1. Implementation check
+    if not _profile_implemented(profile):
+        family = profile.key_establishment.get("family", "unknown")
+        return CompatibilityResult(
+            compatible=False,
+            rejection_reasons=[f"profile family '{family}' is not implemented by any crypto engine"],
+        )
+
+    # 2. Both endpoints must support the required algorithms (AES-128-GCM)
+    req_algs = profile.required_algorithms or ["AES-128-GCM"]
+    sender_algs = getattr(sender, "supported_algorithms", []) or []
+    receiver_algs = getattr(receiver, "supported_algorithms", []) or []
+    for alg in req_algs:
+        if alg not in sender_algs:
+            reasons.append(f"sender does not support required algorithm '{alg}'")
+        if alg not in receiver_algs:
+            reasons.append(f"receiver does not support required algorithm '{alg}'")
+
+    # 3. Minimum CPU level
+    required_cpu = profile.minimum_cpu_level
+    if not _cpu_sufficient(sender, required_cpu):
+        reasons.append(f"sender cpu_level='{sender.cpu_level}' does not meet profile minimum_cpu_level='{required_cpu}'")
+    if not _cpu_sufficient(receiver, required_cpu):
+        reasons.append(f"receiver cpu_level='{receiver.cpu_level}' does not meet profile minimum_cpu_level='{required_cpu}'")
+
+    # 4. Security requirement is relaxed for fallback (soft constraint - not added to reasons)
+
+    # 5. Benchmark evidence (best effort)
+    sender_evidence: Optional[BenchmarkEvidence] = None
+    receiver_evidence: Optional[BenchmarkEvidence] = None
+    try:
+        sender_evidence = find_best_benchmark(
+            benchmark_repo, sender.device_id, profile.profile_id, message_size
+        )
+        if not sender_evidence.exact_match:
+            estimation_notes.append(f"[sender] {sender_evidence.estimation_note}")
+        src = sender_evidence.doc.get("measurement_source", "")
+        if "local-computer" in src or "estimated" in src:
+            is_demo = True
+    except InsufficientEvidenceError:
+        pass
+
+    try:
+        receiver_evidence = find_best_benchmark(
+            benchmark_repo, receiver.device_id, profile.profile_id, message_size
+        )
+        if not receiver_evidence.exact_match:
+            estimation_notes.append(f"[receiver] {receiver_evidence.estimation_note}")
+        src = receiver_evidence.doc.get("measurement_source", "")
+        if "local-computer" in src or "estimated" in src:
+            is_demo = True
+    except InsufficientEvidenceError:
+        pass
+
+    # Predicted resource costs
+    sender_peak_kb = sender_evidence.doc.get("peak_memory_kb", 2.0) if sender_evidence else 2.0
+    receiver_peak_kb = receiver_evidence.doc.get("peak_memory_kb", 2.0) if receiver_evidence else 2.0
+    app_bytes = sender_evidence.doc.get("application_bytes", message_size + 28) if sender_evidence else message_size + 28
+    sender_total_ms = sender_evidence.doc["timings_ms"]["total"] if sender_evidence else 0.5
+    receiver_total_ms = receiver_evidence.doc["timings_ms"]["total"] if receiver_evidence else 0.5
+    combined_ms = sender_total_ms + receiver_total_ms
+
+    # 6. Memory feasibility
+    if not _memory_fits(sender, sender_peak_kb):
+        reasons.append(
+            f"sender available_memory_kb={sender.available_memory_kb:.1f} < "
+            f"predicted peak {sender_peak_kb:.1f} KB for profile '{profile.profile_id}'"
+        )
+    if not _memory_fits(receiver, receiver_peak_kb):
+        reasons.append(
+            f"receiver available_memory_kb={receiver.available_memory_kb:.1f} < "
+            f"predicted peak {receiver_peak_kb:.1f} KB for profile '{profile.profile_id}'"
+        )
+
+    # 7. Packet MTU feasibility
+    limit_a = getattr(sender, "maximum_packet_size_bytes", None)
+    limit_b = getattr(receiver, "maximum_packet_size_bytes", None)
+    if limit_a is not None and app_bytes > limit_a:
+        reasons.append(
+            f"sender maximum_packet_size_bytes={limit_a} < "
+            f"predicted packet overhead {app_bytes} B for profile '{profile.profile_id}'"
+        )
+    if limit_b is not None and app_bytes > limit_b:
+        reasons.append(
+            f"receiver maximum_packet_size_bytes={limit_b} < "
+            f"predicted packet overhead {app_bytes} B for profile '{profile.profile_id}'"
+        )
+
+    # 8. Latency feasibility
+    if not _latency_fits(sender, combined_ms):
+        reasons.append(
+            f"sender latency_requirement_ms={sender.latency_requirement_ms:.0f} < "
+            f"predicted combined latency {combined_ms:.2f} ms"
+        )
+    if not _latency_fits(receiver, combined_ms):
+        reasons.append(
+            f"receiver latency_requirement_ms={receiver.latency_requirement_ms:.0f} < "
+            f"predicted combined latency {combined_ms:.2f} ms"
+        )
+
+    breakdown = (
+        dict(sender_evidence.doc.get("timings_ms", {}))
+        if sender_evidence
+        else {"key_generation": 0.0, "key_establishment": 0.0, "encryption": sender_total_ms, "decryption": receiver_total_ms, "total": combined_ms}
+    )
 
     return CompatibilityResult(
         compatible=len(reasons) == 0,
