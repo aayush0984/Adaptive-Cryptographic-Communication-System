@@ -69,75 +69,75 @@ The system operates across a **four-stage distributed workflow**:
 
 ```text
 IoTEncryption/
-├── client.py                    # Terminal 2: Device A client CLI & sender workflow
-├── server.py                    # Terminal 1: Device B TCP listener & message verification
-├── capture_monitor.py           # Terminal 3: Long-running TShark loopback network monitor
-├── analyze_traffic.py           # Phase 10 CLI: PyShark offline traffic analysis entry point
-├── SYSTEM_FLOW.md               # Comprehensive technical walkthrough, math, and packet flows
-├── requirements.txt             # Python dependencies (cryptography, pymongo, psutil, pyshark)
-├── pyproject.toml               # Package build metadata
-├── .env                         # Local runtime environment configuration
+├── backend/                         # Application source root
+│   ├── .env                         # Local runtime environment configuration
+│   ├── client.py                    # Terminal 2: Device A client CLI & sender workflow
+│   ├── server.py                    # Terminal 1: Device B TCP listener & message verification
+│   ├── capture_monitor.py           # Terminal 3: Long-running TShark loopback network monitor
+│   ├── analyze_traffic.py           # Phase 10 CLI: PyShark offline traffic analysis entry point
+│   │
+│   ├── analysis/                    # Phase 10: PyShark packet dissection & overhead engine
+│   │   ├── __init__.py
+│   │   └── traffic_analyzer.py      # Core TrafficAnalyzer class & metric extractors
+│   │
+│   ├── capture/                     # Phase 9: Wireshark / TShark capture wrapper
+│   │   ├── __init__.py
+│   │   └── packet_capture.py        # Reusable PacketCapture manager & loopback interface detector
+│   │
+│   ├── captures/                    # Destination directory for raw .pcapng files
+│   │   └── .gitkeep
+│   │
+│   ├── communication/               # Length-prefixed JSON protocol framing
+│   │   ├── __init__.py
+│   │   └── protocol.py              # Frame serializer/deserializer, sockets, and session state
+│   │
+│   ├── config/                      # Centralized configuration loaders
+│   │   └── __init__.py              # .env parsing and environment variable fallbacks
+│   │
+│   ├── crypto/                      # Low-level cryptographic primitives
+│   │   ├── __init__.py
+│   │   ├── aes_engine.py            # AES-128/256-GCM authenticated encryption
+│   │   ├── ecc_engine.py            # Ephemeral ECDH (P-256, P-384) + HKDF-SHA256
+│   │   └── rsa_engine.py            # RSA-OAEP (2048/3072-bit) with SHA-256
+│   │
+│   ├── database/                    # MongoDB connection lifecycle & schemas
+│   │   ├── __init__.py
+│   │   ├── connection.py            # Cached MongoClient & Database accessors
+│   │   ├── indexes.py               # Idempotent index creation across all collections
+│   │   └── seed_database.py         # Initial hardware devices and profile seeding script
+│   │
+│   ├── evaluation/                  # Benchmarking engine for empirical evidence
+│   │   ├── __init__.py
+│   │   ├── benchmark.py             # Performance measurement harness (timing, RAM, RSS)
+│   │   ├── memory_monitor.py        # tracemalloc memory profiler
+│   │   └── statistics.py            # Outlier detection & summary statistics
+│   │
+│   ├── models/                      # Dataclasses and domain validation
+│   │   ├── __init__.py
+│   │   ├── crypto_profile.py        # Profile structure, security level, and cipher suite models
+│   │   └── device.py                # Device hardware constraints and power source models
+│   │
+│   ├── repositories/                # Repository layer for MongoDB persistence
+│   │   ├── __init__.py
+│   │   ├── benchmark_repository.py  # Querying benchmark timing and memory metrics
+│   │   ├── device_repository.py     # Active device query and lookups
+│   │   ├── experiment_repository.py # Experiment logging and provenance tracking
+│   │   └── profile_repository.py    # Crypto profile queries
+│   │
+│   └── selection/                   # Two-stage adaptive selection algorithm
+│       ├── __init__.py
+│       ├── compatibility.py         # Stage 1: Mandatory hard constraint filters
+│       ├── scoring.py               # Stage 2: Scenario pressures, weights, and scoring
+│       └── selector.py              # Orchestrator, interactive prompts, and decision logging
 │
-├── analysis/                    # Phase 10: PyShark packet dissection & overhead engine
-│   ├── __init__.py
-│   └── traffic_analyzer.py      # Core TrafficAnalyzer class & metric extractors
+├── captures/                        # Destination directory for raw .pcapng files
 │
-├── capture/                     # Phase 9: Wireshark / TShark capture wrapper
-│   ├── __init__.py
-│   └── packet_capture.py        # Reusable PacketCapture manager & loopback interface detector
+├── scripts/                         # Maintenance tools
+│   └── migrate_experiments.py       # Historical schema migration and index sync
 │
-├── captures/                    # Destination directory for raw .pcapng files
-│   └── .gitkeep
-│
-├── communication/               # Length-prefixed JSON protocol framing
-│   ├── __init__.py
-│   └── protocol.py              # Frame serializer/deserializer, sockets, and session state
-│
-├── config/                      # Centralized configuration loaders
-│   └── __init__.py              # .env parsing and environment variable fallbacks
-│
-├── crypto/                      # Low-level cryptographic primitives
-│   ├── __init__.py
-│   ├── aes_engine.py            # AES-128/256-GCM authenticated encryption
-│   ├── ecc_engine.py            # Ephemeral ECDH (P-256, P-384) + HKDF-SHA256
-│   └── rsa_engine.py            # RSA-OAEP (2048/3072-bit) with SHA-256
-│
-├── database/                    # MongoDB connection lifecycle & schemas
-│   ├── __init__.py
-│   ├── connection.py            # Cached MongoClient & Database accessors
-│   ├── indexes.py               # Idempotent index creation across all collections
-│   └── seed_database.py         # Initial hardware devices and profile seeding script
-│
-├── evaluation/                  # Benchmarking engine for empirical evidence
-│   ├── __init__.py
-│   ├── benchmark.py             # Performance measurement harness (timing, RAM, RSS)
-│   ├── memory_monitor.py        # tracemalloc memory profiler
-│   └── statistics.py            # Outlier detection & summary statistics
-│
-├── models/                      # Dataclasses and domain validation
-│   ├── __init__.py
-│   ├── crypto_profile.py        # Profile structure, security level, and cipher suite models
-│   └── device.py                # Device hardware constraints and power source models
-│
-├── repositories/                # Repository layer for MongoDB persistence
-│   ├── __init__.py
-│   ├── benchmark_repository.py  # Querying benchmark timing and memory metrics
-│   ├── device_repository.py     # Active device query and lookups
-│   ├── experiment_repository.py # Experiment logging and provenance tracking
-│   └── profile_repository.py    # Crypto profile queries
-│
-├── selection/                   # Two-stage adaptive selection algorithm
-│   ├── __init__.py
-│   ├── compatibility.py         # Stage 1: Mandatory hard constraint filters
-│   ├── scoring.py               # Stage 2: Scenario pressures, weights, and scoring
-│   └── selector.py              # Orchestrator, interactive prompts, and decision logging
-│
-├── scripts/                     # Maintenance tools
-│   └── migrate_experiments.py   # Historical schema migration and index sync
-│
-└── tests/                       # Automated test suite
-    ├── unit/                    # Unit tests for crypto, protocol, capture, and analysis
-    └── integration/             # Integration tests for MongoDB and socket flows
+└── tests/                           # Automated test suite
+    ├── unit/                        # Unit tests for crypto, protocol, capture, and analysis
+    └── integration/                 # Integration tests for MongoDB and socket flows
 ```
 
 ---
@@ -171,7 +171,7 @@ All documents reside in the **`iot_security`** database:
 ## Phase-wise Overview (Phases 0–10)
 
 * **Phase 0 — Setup & Environment**: Repository structure, virtual environment, and MongoDB configuration.
-* **Phase 1 — Device Profiles Catalog**: Registered hardware specs (ESP32, Raspberry Pi 4, etc.) in MongoDB.
+* **Phase 1 — Device Profiles Catalog**: Registered hardware specifications across 20 diverse IoT devices (microcontrollers and single-board computers including ESP32, Raspberry Pi 4 & 5, ESP8266, STM32, Arduino, Jetson Nano & Orin Nano, Teensy 4.1, etc.) in MongoDB `devices`.
 * **Phase 2 — Cryptographic Primitives**: AES-GCM, RSA-OAEP, and ECDH/HKDF engine implementations.
 * **Phase 3 — Empirical Benchmarking**: Benchmark harness measuring execution timings and memory for each profile/device pairing.
 * **Phase 4 — Hard Constraint Filtering (Stage 1)**: Rejects profiles violating security policy floor, CPU capability, memory capacity, latency ceilings, or MTU.

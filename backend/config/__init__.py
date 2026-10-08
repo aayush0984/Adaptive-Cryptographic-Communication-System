@@ -7,8 +7,14 @@ from pathlib import Path
 
 
 def load_environment(path: str | Path | None = None) -> dict[str, str]:
-    """Load environment variables from the project root .env file if present."""
-    env_path = Path(path) if path is not None else Path(__file__).resolve().parents[1] / ".env"
+    """Load environment variables from backend/.env or project root .env file if present."""
+    if path is not None:
+        env_path = Path(path)
+    else:
+        # Check backend/.env first, then project root (.env)
+        backend_env = Path(__file__).resolve().parents[1] / ".env"
+        root_env = Path(__file__).resolve().parents[2] / ".env"
+        env_path = backend_env if backend_env.exists() else root_env
     values: dict[str, str] = {}
 
     if not env_path.exists():
@@ -22,6 +28,9 @@ def load_environment(path: str | Path | None = None) -> dict[str, str]:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
             value = value[1:-1]
         values[key] = value
+
+    for k, v in values.items():
+        os.environ.setdefault(k, v)
 
     os.environ.setdefault("MONGODB_URI", values.get("MONGODB_URI", "mongodb://localhost:27017/"))
     os.environ.setdefault("MONGODB_DB", values.get("MONGODB_DB", "iot_security"))

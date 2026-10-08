@@ -8,10 +8,13 @@ __pycache__/
 .venv/
 env/
 venv/
+backend/venv/
+backend/.venv/
 
 # Environment variables
 .env
 .env.*
+backend/.env
 
 # IDE / editor files
 .vscode/
@@ -26,8 +29,6 @@ dist/
 data/
 *.csv
 *.json
-*.db
-*.sqlite3
 
 # Coverage / testing
 .coverage

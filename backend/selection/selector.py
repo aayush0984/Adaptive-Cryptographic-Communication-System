@@ -130,7 +130,7 @@ def prompt_device_selection(
     if not devices:
         raise ValueError("No active devices found in the MongoDB 'devices' collection.")
 
-    displayed = devices[:10]
+    displayed = list(devices)
     print(f"\n--- {prompt_text} ---")
     for idx, dev in enumerate(displayed, 1):
         ram = f"{dev.available_memory_kb:.0f} KB RAM"

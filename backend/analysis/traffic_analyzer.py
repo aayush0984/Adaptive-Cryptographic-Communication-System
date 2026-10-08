@@ -8,10 +8,23 @@ and communication overhead.
 from __future__ import annotations
 
 import re
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
+
+# PyShark compatibility shim for Python 3.12+ / 3.14 where child watchers were removed
+class _DummyChildWatcher:
+    def attach_loop(self, loop: Any) -> None:
+        pass
+
+if not hasattr(asyncio, "get_child_watcher"):
+    asyncio.get_child_watcher = lambda: _DummyChildWatcher()  # type: ignore[attr-defined]
+if not hasattr(asyncio, "set_child_watcher"):
+    asyncio.set_child_watcher = lambda watcher: None  # type: ignore[attr-defined]
+if not hasattr(asyncio, "SafeChildWatcher"):
+    asyncio.SafeChildWatcher = _DummyChildWatcher  # type: ignore[attr-defined]
 
 import pyshark
 
@@ -150,8 +163,14 @@ class TrafficAnalyzer:
 
         cap = None
         try:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
             # Open pcap with keep_packets=False to prevent unbounded RAM usage
-            cap = pyshark.FileCapture(str(path), keep_packets=False)
+            cap = pyshark.FileCapture(str(path), keep_packets=False, eventloop=loop)
 
             for pkt in cap:
                 total_packets += 1
