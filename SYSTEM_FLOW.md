@@ -23,6 +23,10 @@ User Input: Device A (Sender) + Device B (Receiver) + Plaintext Message
    - Latency Ceiling: total_predicted_latency <= min(latency_limit_A, latency_limit_B)
    - MTU Ceiling: application_bytes <= min(packet_limit_A, packet_limit_B)
    - Engine Availability: verification of crypto engines
+   - [EDGE CASE] If all standard profiles (C1–C4) fail constraints:
+     ├── Activate Fallback Profile C5 (Loaded from MongoDB: iot_security.crypto_profiles)
+     ├── Relax security requirement as soft constraint (basic security accepted)
+     └── Strictly verify hard technical constraints (AES-128-GCM support, RAM, CPU, MTU)
                                 │
                                 ▼
 3. Empirical Benchmark Retrieval (MongoDB: iot_security.benchmarks)
@@ -32,18 +36,18 @@ User Input: Device A (Sender) + Device B (Receiver) + Plaintext Message
 4. Stage 2: Dynamic Scenario Weighting & Multi-Objective Scoring (selection/scoring.py)
    - Continuous pressure derivations: P_time, P_memory, P_comm, P_energy
    - Dynamic weight normalization: w_time + w_memory + w_comm + w_energy = 1.0
-   - Candidate min-max normalization & weighted composite scoring
+   - Candidate min-max normalization & weighted composite scoring (standard candidates only)
    - Deterministic tie-breaking (score -> wire size -> profile ID)
                                 │
                                 ▼
 5. Selection Audit & Logging (MongoDB: iot_security.experiments)
-   - Records experiment_id, candidates evaluated, rejections, dynamic weights, winner (e.g., C4)
+   - Records experiment_id, candidates evaluated, rejections, dynamic weights, winner (e.g., C4 or C5)
+   - Records selection_mode ("normal" vs "fallback"), fallback_used, fallback_reason, relaxed_constraints
                                 │
                                 ▼
 6. Sender Cryptographic Execution (client.py & crypto/)
-   - Ephemeral key generation (RSA or ECDH NIST curve)
-   - Shared secret derivation & HKDF-SHA256 session key extraction (AES-128 or AES-256)
-   - AES-GCM authenticated encryption (96-bit nonce, 128-bit authentication tag)
+   - For C1–C4: Ephemeral key generation (RSA/ECDH), HKDF session key extraction, AES-GCM encryption
+   - For C5: Pre-Shared Key (128-bit PSK loaded from .env) + AES-128-GCM authenticated encryption
                                 │
                                 ▼
 7. Framed TCP Transmission (communication/protocol.py)
@@ -53,7 +57,8 @@ User Input: Device A (Sender) + Device B (Receiver) + Plaintext Message
                                 ▼
 8. Receiver Processing & Verification (server.py & crypto/)
    - Length-prefixed frame extraction & protocol deserialization
-   - Profile validation, asymmetric key derivation / unwrapping, AES-GCM decryption
+   - For C1–C4: Profile validation, asymmetric key derivation / unwrapping, AES-GCM decryption
+   - For C5: PSK lookup from configuration and AES-128-GCM authentication tag verification + decryption
    - GCM authentication tag verification; echoes verified payload in ACK frame
    - Server writes execution result to MongoDB: iot_security.experiments
                                 │
@@ -150,8 +155,57 @@ For each profile $k \in \{C1, C2, C3, C4\}$:
 6. **Engine Implementation Rule**:
    Verifies that the underlying engine (`crypto/rsa_engine.py`, `crypto/ecc_engine.py`, `crypto/aes_engine.py`) is implemented and operational.
 
+#### Edge-Case Handling: Fallback Cryptographic Profile (`C5`)
+
+When hardware constraints (e.g. low CPU, low RAM) or high security requirements prevent **all** standard profiles (`C1`–`C4`) from satisfying compatibility checks (`feasible_pairs` is empty), the selector triggers the C5 fallback path:
+
+```text
+Evaluate C1–C4 ──► [None Feasible] ──► Load C5 from MongoDB
+                                                │
+                                                ▼
+                                    check_c5_technical_feasibility()
+                                    ├── Relax Security Level: "high" accepted for "basic"
+                                    ├── Verify Hard Constraint: AES-128-GCM supported
+                                    ├── Verify Hard Constraint: RAM >= peak_kb (default 2.0 KB)
+                                    ├── Verify Hard Constraint: cpu_level >= "low"
+                                    └── Verify Hard Constraint: packet_size <= MTU
+                                                │
+                          ┌─────────────────────┴─────────────────────┐
+                          ▼                                           ▼
+                    [Infeasible]                                 [Feasible]
+                 Raise ValueError:                        Emit 5 [selector] logs
+          "fallback_profile_not_feasible"                 Persist fallback experiment
+                                                          Select C5 (PSK + AES-128-GCM)
+```
+
+##### 1. Strict Isolation from Standard Scoring
+* `C5` is filtered out before Stage 1 compatibility checks:
+  $$\text{standard\_profiles} = [p \in \text{enabled\_profiles} \mid p.\text{profile\_id} \ne \text{"C5"}]$$
+* `C5` never participates in Stage 2 multi-objective scoring alongside `C1`–`C4`. It is evaluated only if all standard profiles fail.
+
+##### 2. Soft Security Constraint vs. Hard Technical Constraints
+* **Soft Constraint (Relaxed)**: During fallback, the security requirement floor is relaxed. If a device requires `security_requirement = "high"`, `C5` (`basic`) is not rejected.
+* **Hard Constraints (Strictly Enforced)**:
+  1. **Algorithm Support**: Both Device A and Device B must explicitly list `"AES-128-GCM"` in their `supported_algorithms`.
+  2. **Memory Feasibility**: $\text{RAM}_{\text{avail}, A} \ge 2.0\text{ KB}$ and $\text{RAM}_{\text{avail}, B} \ge 2.0\text{ KB}$.
+  3. **CPU Level**: $\text{device.cpu\_level} \ge \text{"low"}$.
+  4. **MTU Limit**: $B_{\text{message}} + 28 \le \min(\text{MTU}_A, \text{MTU}_B)$ (28 bytes accounts for 12-byte GCM nonce + 16-byte GCM tag).
+* If any technical constraint fails, selection aborts with:
+  $$\text{failure\_category} = \text{"fallback\_profile\_not\_feasible"}$$
+  recording per-device technical failure reasons in `experiments`.
+
+##### 3. Selector Fallback Logging Output
+Upon successful fallback activation, the selector prints:
+```text
+[selector] No standard crypto profile satisfies all constraints.
+[selector] Activating fallback profile C5.
+[selector] WARNING: Security requirement has been relaxed.
+[selector] Selected: C5 - Fallback PSK with AES-128-GCM
+[selector] Selection mode: FALLBACK
+```
+
 #### MongoDB Reads
-* `iot_security.crypto_profiles`: Fetches all active profiles.
+* `iot_security.crypto_profiles`: Fetches all active profiles (and dynamically retrieves `C5` via `get_by_id("C5")` if fallback activates).
 * `iot_security.benchmarks`: Fetches nearest empirical benchmark runs for $(A, k, B_{\text{message}})$ and $(B, k, B_{\text{message}})$.
 
 ---
@@ -245,6 +299,7 @@ $$\text{Score}_k = w_{\text{time}} \cdot \mathcal{N}(T_k) + w_{\text{memory}} \c
 | **`C2`** | RSA-OAEP (3072-bit, SHA-256) | AES-256-GCM | high | high |
 | **`C3`** | ECDH (NIST P-256) + HKDF-SHA256 | AES-128-GCM | standard | low |
 | **`C4`** | ECDH (NIST P-384) + HKDF-SHA256 | AES-256-GCM | high | medium |
+| **`C5`** | Pre-Shared Key (128-bit PSK) | AES-128-GCM | basic | low |
 
 #### Cryptographic Lifecycle
 
@@ -264,6 +319,17 @@ $$\text{Score}_k = w_{\text{time}} \cdot \mathcal{N}(T_k) + w_{\text{memory}} \c
 2. Key wrapping using RSA-OAEP with MGF1(SHA-256) and receiver public key:
    $$C_{\text{key}} = \text{RSA-OAEP-Encrypt}(PK_R, K_{\text{session}})$$
 3. Payload encrypted with AES-GCM using $K_{\text{session}}$.
+
+##### For PSK Fallback Profile (`C5`):
+1. **Pre-Shared Key Acquisition**: The 128-bit key $K_{\text{psk}}$ is retrieved from environment configuration (`FALLBACK_PSK_HEX` via `config.get_env()`). Asymmetric key pairs and mathematical scalar multiplications are skipped entirely.
+2. **Authenticated Encryption (AES-GCM)**:
+   Sender generates a 96-bit (12-byte) random nonce $N$.
+   $$(\text{ciphertext}, \text{tag}) = \text{AES-GCM-Encrypt}(K_{\text{psk}}, N, \text{plaintext}, \text{aad}=\text{None})$$
+   The `ciphertext_hex` and `nonce_hex` are embedded into the protocol frame payload alongside the message.
+3. **Receiver Decryption & Integrity Authentication**:
+   Receiver loads the same configured 128-bit PSK and verifies the GCM authentication tag:
+   $$\text{plaintext} = \text{AES-GCM-Decrypt}(K_{\text{psk}}, N, \text{ciphertext}, \text{aad}=\text{None})$$
+   Any modification of the ciphertext or nonce raises an `AuthenticationError`, failing the exchange.
 
 ---
 
@@ -427,21 +493,23 @@ Count of packets where Wireshark analysis flag `analysis_retransmission` is set.
 
 ---
 
-## 3. End-to-End Walkthrough Example
+## 3. End-to-End Walkthrough Examples
 
-### Setup:
+### Walkthrough A: Standard Adaptive Selection (`C4` Winner)
+
+#### Setup:
 * **Device A**: `esp32` (Available RAM: 520 KB, CPU: `medium`, Security: `standard`, Power: `battery`, Latency Limit: 1000 ms, MTU: 1500 B).
 * **Device B**: `raspberry_pi_4` (Available RAM: 2 GB, CPU: `high`, Security: `high`, Power: `mains`, Latency Limit: 500 ms, MTU: 1500 B).
 * **Message**: `"test"` ($4\text{ bytes}$).
 
-### Execution Trace:
+#### Execution Trace:
 1. **Constraint Evaluation**:
    - Raspberry Pi 4 requires `high` security $\implies$ `C1` and `C3` (standard security) are rejected.
    - ESP32 has `medium` CPU $\implies$ `C2` (requires `high` CPU) is rejected.
    - Profile `C4` (ECDH-P384 + AES-256-GCM) satisfies all constraints.
 2. **Selection**:
    - `C4` is selected with dynamic weights prioritizing battery power ($w_{\text{energy}} = 40.3\%$).
-   - Record created in `experiments` under ID `exp-a207ff8e`.
+   - Record created in `experiments` under ID `exp-a207ff8e` with `selection_mode: "normal"` and `fallback_used: false`.
 3. **Execution & Framing**:
    - Client establishes ephemeral ECDH-P384 key exchange, derives AES-256 key, encrypts `"test"`.
    - Sends length-prefixed frame to `127.0.0.1:5000`.
@@ -453,3 +521,59 @@ Count of packets where Wireshark analysis flag `analysis_retransmission` is set.
    - Writes record to `iot_security.traffic`.
 6. **PyShark Analysis (Terminal 4)**:
    - `python analyze_traffic.py --experiment exp-a207ff8e` computes 507 bytes TCP payload, 0 retransmissions, 1960 bytes overhead ($49,000.00\%$), and updates `traffic_analysis`.
+
+---
+
+### Walkthrough B: Edge-Case C5 Fallback (`C5` Activated)
+
+#### Setup:
+* **Device A**: Resource-constrained microcontroller (e.g., Available RAM: 40 KB, CPU: `low`, Security: `high`, Power: `battery`, MTU: 1500 B).
+* **Device B**: Sensor node (e.g., Available RAM: 64 KB, CPU: `low`, Security: `high`, Power: `battery`, MTU: 1500 B).
+* **Message**: `"alert: threshold exceeded"` ($25\text{ bytes}$).
+
+#### Execution Trace:
+1. **Stage 1 Standard Constraint Evaluation (C1–C4)**:
+   - `C1` (RSA-2048): Rejected — Security floor `standard` < Device requirement `high`; heap memory exceeds 40 KB.
+   - `C2` (RSA-3072): Rejected — Requires `high` CPU; CPU is `low`; heap memory exceeds 40 KB.
+   - `C3` (ECDH-P256): Rejected — Security floor `standard` < Device requirement `high`.
+   - `C4` (ECDH-P384): Rejected — Requires `medium` CPU; CPU is `low`.
+   - Result: Zero standard profiles are feasible (`len(feasible_pairs) == 0`).
+2. **Fallback Activation**:
+   - Selector logs:
+     ```text
+     [selector] No standard crypto profile satisfies all constraints.
+     [selector] Activating fallback profile C5.
+     [selector] WARNING: Security requirement has been relaxed.
+     ```
+   - Dynamically loads `C5` from MongoDB `crypto_profiles`.
+3. **Technical Feasibility Verification**:
+   - Soft check: Security requirement (`high`) relaxed for `basic` profile.
+   - Hard check: Both devices list `"AES-128-GCM"` in `supported_algorithms` $\implies$ PASSED.
+   - Hard check: Device RAM ($40\text{ KB}$) $\ge 2.0\text{ KB}$ $\implies$ PASSED.
+   - Hard check: Device CPU (`low`) $\ge \text{profile.minimum\_cpu\_level}$ (`low`) $\implies$ PASSED.
+   - Hard check: Packet size ($25 + 28 = 53\text{ B}$) $\le 1500\text{ B}$ $\implies$ PASSED.
+   - Selector logs:
+     ```text
+     [selector] Selected: C5 - Fallback PSK with AES-128-GCM
+     [selector] Selection mode: FALLBACK
+     ```
+4. **Audit Persistence**:
+   - Persists experiment record with:
+     ```json
+     {
+       "selected_profile": "C5",
+       "selection_mode": "fallback",
+       "fallback_used": true,
+       "fallback_reason": "no_profile_satisfies_constraints",
+       "relaxed_constraints": ["security_requirement"]
+     }
+     ```
+5. **Execution & Framing**:
+   - Client retrieves 128-bit PSK from `FALLBACK_PSK_HEX`.
+   - Encrypts payload with `AES-128-GCM` (skipping RSA/ECDH).
+   - Sends protocol frame with `ciphertext_hex` and `nonce_hex`.
+6. **Server Processing**:
+   - Server loads configured PSK, verifies GCM tag, and decrypts ciphertext.
+   - Echoes verified message in ACK frame.
+7. **Network Capture & Traffic Analysis**:
+   - Capture monitor and PyShark analyzer process traffic identically to standard profiles, recording exact on-wire overhead and performance metrics.

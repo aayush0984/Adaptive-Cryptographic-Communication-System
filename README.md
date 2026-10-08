@@ -98,6 +98,7 @@ IoTEncryption/
 │   │   ├── __init__.py
 │   │   ├── aes_engine.py            # AES-128/256-GCM authenticated encryption
 │   │   ├── ecc_engine.py            # Ephemeral ECDH (P-256, P-384) + HKDF-SHA256
+│   │   ├── psk_engine.py            # Pre-Shared Key (PSK) + AES-128-GCM fallback engine
 │   │   └── rsa_engine.py            # RSA-OAEP (2048/3072-bit) with SHA-256
 │   │
 │   ├── database/                    # MongoDB connection lifecycle & schemas
@@ -136,7 +137,7 @@ IoTEncryption/
 │   └── migrate_experiments.py       # Historical schema migration and index sync
 │
 └── tests/                           # Automated test suite
-    ├── unit/                        # Unit tests for crypto, protocol, capture, and analysis
+    ├── unit/                        # Unit tests for crypto, protocol, capture, analysis, and C5 fallback
     └── integration/                 # Integration tests for MongoDB and socket flows
 ```
 
@@ -147,7 +148,7 @@ IoTEncryption/
 * **Python 3.10+**: Core programming language.
 * **MongoDB (Community Server 7.0+)**: Primary document database (`iot_security`).
 * **`pymongo`**: Python driver for MongoDB database operations.
-* **`cryptography` (hazmat)**: High-speed, robust cryptographic implementations of AES-GCM, RSA-OAEP, ECDH, and HKDF.
+* **`cryptography` (hazmat)**: High-speed, robust cryptographic implementations of AES-GCM, RSA-OAEP, ECDH, HKDF, and PSK.
 * **Wireshark / TShark (CLI)**: Packet capture engine used by `capture_monitor.py` for live loopback capture.
 * **PyShark**: Python wrapper for TShark packet dissection, used by `analyze_traffic.py` to parse `.pcapng` structures.
 * **`pytest`**: Unit and integration test runner.
@@ -161,9 +162,9 @@ All documents reside in the **`iot_security`** database:
 | Collection | Description | Key Identifier |
 | :--- | :--- | :--- |
 | **`devices`** | Catalog of IoT hardware specifications: CPU level, available RAM (`available_memory_kb`), max packet MTU, latency ceilings, security policy (`standard`/`high`), and power source (`battery`/`mains`). | `device_id` (Unique) |
-| **`crypto_profiles`** | Catalog of supported cipher suites: `C1` (RSA-2048 + AES-128-GCM), `C2` (RSA-3072 + AES-256-GCM), `C3` (ECDH-P256 + AES-128-GCM), `C4` (ECDH-P384 + AES-256-GCM). | `profile_id` (Unique) |
+| **`crypto_profiles`** | Catalog of supported cipher suites: `C1` (RSA-2048 + AES-128-GCM), `C2` (RSA-3072 + AES-256-GCM), `C3` (ECDH-P256 + AES-128-GCM), `C4` (ECDH-P384 + AES-256-GCM), and `C5` (Fallback PSK + AES-128-GCM). | `profile_id` (Unique) |
 | **`benchmarks`** | Empirical execution timings (`key_generation`, `key_establishment`, `encryption`, `decryption`) and peak heap allocations (`tracemalloc`) across message sizes. | `run_id` (Unique, Sparse) |
-| **`experiments`** | Records adaptive selection decisions, candidate rejection reasons, dynamic weights, constraint pressures, and observed round-trip status. | `experiment_id` (Indexed) |
+| **`experiments`** | Records adaptive selection decisions, candidate rejection reasons, dynamic weights, constraint pressures, fallback metadata, and observed round-trip status. | `experiment_id` (Indexed) |
 | **`traffic`** | Stores Phase 9 capture metadata (`.pcapng` path, interface, filter, SHA-256 hash, timestamps) and Phase 10 nested `traffic_analysis` results. | `experiment_id` (Unique) |
 
 ---
@@ -220,6 +221,7 @@ SERVER_HOST=127.0.0.1
 SERVER_PORT=5000
 CAPTURE_INTERFACE=lo0
 CAPTURE_DIR=captures
+FALLBACK_PSK_HEX=0123456789abcdef0123456789abcdef
 ```
 
 ### 4. Database Initialization
@@ -337,6 +339,52 @@ Status           : completed
 * **TCP Payload (507 B)**: The JSON protocol frames transferred over the connection (Sender HELLO frame: 240 B + Receiver ACK frame: 267 B).
 * **Captured Bytes (1964 B)**: The total on-wire packet capture size including Ethernet/Null headers, IPv4 headers, TCP headers, handshake packets (SYN, SYN-ACK, ACK), data frames, ACK responses, and teardown packets (FIN-ACK).
 * **Network Overhead (1960 B / 49,000%)**: For ultra-short telemetry payloads (4 bytes), full-transport overhead naturally dominates wire communication. This is a property of transport and cryptographic framing, not 49,000% cipher expansion.
+
+---
+
+## Fallback Cryptographic Profile (`C5`) & Edge-Case Handling
+
+In constrained IoT deployments, extreme hardware constraints (e.g., microcontrollers with <100 KB available RAM or low-tier CPUs) combined with strict security policies may cause all standard profiles (`C1`–`C4`) to fail Stage 1 compatibility checks. Instead of failing the entire transaction, the framework triggers an **adaptive fallback mechanism** using profile **`C5`**.
+
+### Fallback Architecture:
+
+```text
+Evaluate C1–C4
+      │
+      ▼
+Compatible profile?
+    /    \
+  YES     NO
+   │       │
+   │       ▼
+   │     Load C5 from MongoDB (iot_security.crypto_profiles)
+   │       │
+   │       ▼
+   │     Check Technical Feasibility
+   │     (Relax security; strictly enforce AES-128-GCM, RAM, CPU, MTU)
+   │       │
+   │       ├─── Feasible? ──► NO ──► Fail: fallback_profile_not_feasible
+   │       ▼
+   │      YES:
+   │      [selector] No standard crypto profile satisfies all constraints.
+   │      [selector] Activating fallback profile C5.
+   │      [selector] WARNING: Security requirement has been relaxed.
+   │      [selector] Selected: C5 - Fallback PSK with AES-128-GCM
+   │      [selector] Selection mode: FALLBACK
+   │       │
+   ▼       ▼
+Normal    Fallback
+Scoring   Selection
+   │       │
+   └───────┴──────► Encrypt & Send Over TCP Channel
+```
+
+### Key Rules & Behavior:
+1. **Fallback-Only Isolation**: `C5` is strictly excluded from normal compatibility filtering and multi-objective scoring alongside `C1`–`C4`. It is only loaded from MongoDB if all standard profiles fail.
+2. **Soft Security Constraint**: If a device specifies `security_requirement = "high"`, `C5` (`basic`) is not rejected. The security requirement is relaxed as a soft constraint to maintain availability.
+3. **Hard Technical Constraints**: Technical feasibility remains mandatory. Both devices must support `AES-128-GCM` in `supported_algorithms`, satisfy minimum CPU capability (`low`), and satisfy memory/MTU limits. If technically impossible, selection fails with `fallback_profile_not_feasible`.
+4. **Pre-Shared Key (PSK) + AES-128-GCM**: No RSA or ECDH key exchange is executed. The 128-bit PSK is loaded from `FALLBACK_PSK_HEX` via `.env`.
+5. **Experiment Audit Provenance**: Fallback transactions are flagged in `iot_security.experiments` with `selection_mode: "fallback"`, `fallback_used: true`, `fallback_reason: "no_profile_satisfies_constraints"`, and `relaxed_constraints: ["security_requirement"]`. Normal runs record `selection_mode: "normal"` and `fallback_used: false`.
 
 ---
 
