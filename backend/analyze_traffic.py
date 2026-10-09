@@ -13,9 +13,22 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Any
 
 from analysis.traffic_analyzer import TrafficAnalyzer
+
+# Directory to export analysis text files
+EXPORT_DATA_DIR = Path(__file__).resolve().parent / "analysis" / "data"
+
+
+def export_analysis_to_file(experiment_id: str, analysis: dict[str, Any], analyzer: TrafficAnalyzer) -> Path:
+    """Export the formatted traffic analysis to a .txt file named <experiment_id>.txt."""
+    EXPORT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    out_file = EXPORT_DATA_DIR / f"{experiment_id}.txt"
+    content = analyzer.format_summary(experiment_id, analysis)
+    out_file.write_text(content + "\n", encoding="utf-8")
+    return out_file
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,7 +105,11 @@ def main() -> int:
     if args.experiment:
         analysis = analyzer.analyze_experiment(args.experiment, persist=persist)
         print(analyzer.format_summary(args.experiment, analysis), flush=True)
-        return 0 if analysis.get("analysis_status") == "completed" else 1
+        if analysis.get("analysis_status") == "completed":
+            out_path = export_analysis_to_file(args.experiment, analysis, analyzer)
+            print(f"[ANALYSIS] Exported report: {out_path}", flush=True)
+            return 0
+        return 1
 
     if args.all:
         results = analyzer.analyze_all(persist=persist)
@@ -104,9 +121,12 @@ def main() -> int:
             exp_id = item["experiment_id"]
             analysis = item["analysis"]
             print(analyzer.format_summary(exp_id, analysis), flush=True)
-            print()
-            if analysis.get("analysis_status") != "completed":
+            if analysis.get("analysis_status") == "completed":
+                out_path = export_analysis_to_file(exp_id, analysis, analyzer)
+                print(f"[ANALYSIS] Exported report: {out_path}", flush=True)
+            else:
                 overall_ok = False
+            print()
         return 0 if overall_ok else 1
 
     # Default or --pending: Analyze pending captures
@@ -120,9 +140,12 @@ def main() -> int:
         exp_id = item["experiment_id"]
         analysis = item["analysis"]
         print(analyzer.format_summary(exp_id, analysis), flush=True)
-        print()
-        if analysis.get("analysis_status") != "completed":
+        if analysis.get("analysis_status") == "completed":
+            out_path = export_analysis_to_file(exp_id, analysis, analyzer)
+            print(f"[ANALYSIS] Exported report: {out_path}", flush=True)
+        else:
             overall_ok = False
+        print()
 
     return 0 if overall_ok else 1
 

@@ -13,12 +13,15 @@ from analysis.traffic_analyzer import TrafficAnalyzer
 
 IST = ZoneInfo("Asia/Kolkata")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SAMPLE_PCAP = PROJECT_ROOT / "captures" / "experiment_exp-a207ff8e_C4_4B.pcapng"
+BACKEND_ROOT = PROJECT_ROOT / "backend"
+_candidate_backend = BACKEND_ROOT / "captures" / "experiment_exp-a207ff8e_C4_4B.pcapng"
+_candidate_root = PROJECT_ROOT / "captures" / "experiment_exp-a207ff8e_C4_4B.pcapng"
+SAMPLE_PCAP = _candidate_backend if _candidate_backend.exists() else _candidate_root
 
 
 @pytest.fixture
 def analyzer() -> TrafficAnalyzer:
-    return TrafficAnalyzer(project_root=PROJECT_ROOT, server_port=5000)
+    return TrafficAnalyzer(project_root=BACKEND_ROOT, server_port=5000)
 
 
 def test_analyze_sample_pcap(analyzer: TrafficAnalyzer) -> None:

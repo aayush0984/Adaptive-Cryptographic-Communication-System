@@ -26,7 +26,7 @@ dist/
 *.egg-info/
 
 # Data and generated files
-data/
+/data/
 *.csv
 *.json
 
@@ -54,7 +54,12 @@ htmlcov/
 plan/
 
 # Capture files
-captures/
+backend/captures/
+!backend/captures/.gitkeep
+
+# Analysis export data
+backend/analysis/data/*
+!backend/analysis/data/.gitkeep
 
 # Report outputs (ignore generated charts/tables but keep .gitkeep)
 reports/charts/*

@@ -131,8 +131,6 @@ IoTEncryption/
 │       ├── scoring.py               # Stage 2: Scenario pressures, weights, and scoring
 │       └── selector.py              # Orchestrator, interactive prompts, and decision logging
 │
-├── captures/                        # Destination directory for raw .pcapng files
-│
 ├── scripts/                         # Maintenance tools
 │   └── migrate_experiments.py       # Historical schema migration and index sync
 │
