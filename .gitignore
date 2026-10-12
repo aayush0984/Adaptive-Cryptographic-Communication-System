@@ -67,3 +67,6 @@ reports/tables/*
 
 # Do not ignore .gitkeep files
 !**/.gitkeep
+frontend/node_modules/
+frontend/dist/
+frontend/.env
