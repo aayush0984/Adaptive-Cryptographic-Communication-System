@@ -1,0 +1,48 @@
+/* Traffic analysis tab. Reuses your existing .panel, .badge, .content-page, .page-title,
+   .secondary, .error-box and .spin classes. Colours fall back to neutral values if your
+   theme variables are named differently. */
+.traffic-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.traffic-actions { display: flex; gap: 8px; }
+.traffic-pending .secondary { margin-top: 12px; }
+.traffic-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.traffic-stat { display: flex; gap: 12px; align-items: center; padding: 14px 16px; border: 1px solid rgba(128,128,128,.25); border-radius: 12px; }
+.traffic-stat-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: rgba(79,140,255,.14); color: var(--accent, #4f8cff); }
+.traffic-stat span { display: block; font-size: 12px; opacity: .7; }
+.traffic-stat strong { display: block; font-size: 20px; line-height: 1.2; }
+.traffic-stat small { opacity: .6; font-size: 11px; }
+
+.traffic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.traffic-muted { opacity: .65; font-size: 13px; }
+.traffic-empty { display: flex; gap: 14px; align-items: center; padding: 20px; }
+.traffic-empty p { margin: 4px 0 0; opacity: .7; }
+
+.traffic-bars { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.traffic-bar-row { display: grid; grid-template-columns: 44px 1fr; gap: 6px 10px; align-items: center; }
+.traffic-bar-row strong { grid-column: 2; font-size: 12px; font-weight: 500; opacity: .75; }
+.traffic-bar-label { font-weight: 600; }
+.traffic-bar-track { height: 10px; border-radius: 6px; background: rgba(128,128,128,.2); overflow: hidden; }
+.traffic-bar-fill { height: 100%; border-radius: 6px; background: var(--accent, #4f8cff); }
+
+.traffic-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin-top: 8px; }
+.traffic-detail-grid small { display: block; font-size: 11px; opacity: .65; }
+.traffic-detail-grid strong { font-size: 14px; }
+.traffic-direction { display: grid; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(128,128,128,.25); }
+.traffic-direction div { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.traffic-direction strong { margin-left: auto; }
+.traffic-pending { display: flex; gap: 12px; align-items: flex-start; margin-top: 8px; }
+.traffic-pending p { margin: 4px 0 0; font-size: 13px; opacity: .75; }
+.traffic-link { margin-top: 14px; background: none; border: 0; color: var(--accent, #4f8cff); cursor: pointer; padding: 0; font-size: 12px; }
+.traffic-raw { margin-top: 8px; max-height: 260px; overflow: auto; font-size: 11px; padding: 10px; border-radius: 8px; background: rgba(128,128,128,.12); }
+
+.traffic-table { display: flex; flex-direction: column; }
+.traffic-row { display: grid; grid-template-columns: 1.6fr .6fr .8fr .7fr .9fr .8fr .9fr; gap: 10px; align-items: center; width: 100%; text-align: left; padding: 11px 14px; background: none; border: 0; border-bottom: 1px solid rgba(128,128,128,.18); color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.traffic-row:hover { background: rgba(128,128,128,.08); }
+.traffic-row.active { background: rgba(79,140,255,.12); }
+.traffic-head { cursor: default; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; }
+.traffic-head:hover { background: none; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+@media (max-width: 720px) {
+  .traffic-row { grid-template-columns: 1.4fr .6fr .8fr .8fr; }
+  .traffic-row > :nth-child(3), .traffic-row > :nth-child(6) { display: none; }
+}
