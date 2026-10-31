@@ -1,1 +1,4 @@
-"""Database package initialization."""
+"""
+Database package initialization.
+mongod --dbpath ~/data/db
+"""

@@ -11,6 +11,7 @@ from typing import Any
 from bson import ObjectId
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from client import run_client
@@ -61,6 +62,11 @@ def json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [json_safe(v) for v in value]
     return value
+
+
+@app.get("/")
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/api/health")

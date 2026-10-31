@@ -1,4 +1,7 @@
-"""Server for the phase-8 secure sender/receiver protocol."""
+"""
+Server for the phase-8 secure sender/receiver protocol.
+Run from backend/: python server.py
+"""
 
 from __future__ import annotations
 

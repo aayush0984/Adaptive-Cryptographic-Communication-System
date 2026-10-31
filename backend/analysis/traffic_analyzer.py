@@ -155,11 +155,13 @@ class TrafficAnalyzer:
         tcp_payload_bytes = 0
         tcp_retransmissions = 0
         app_data_packets = 0
+        total_frame_bytes = 0
         min_size: Optional[int] = None
         max_size: Optional[int] = None
         first_packet_at: Optional[datetime] = None
         last_packet_at: Optional[datetime] = None
         protocols_seen_set: set[str] = set()
+        packets: list[dict[str, Any]] = []
 
         cap = None
         try:
@@ -175,6 +177,7 @@ class TrafficAnalyzer:
             for pkt in cap:
                 total_packets += 1
                 pkt_len = int(pkt.length)
+                total_frame_bytes += pkt_len
 
                 if min_size is None or pkt_len < min_size:
                     min_size = pkt_len
@@ -205,6 +208,10 @@ class TrafficAnalyzer:
                         elif l_name == "tcp":
                             protocols_seen_set.add("TCP")
 
+                direction = "-"
+                flags_str = "-"
+                p_payload_len = 0
+
                 # TCP layer analysis
                 if "tcp" in pkt or hasattr(pkt, "tcp"):
                     tcp_packets += 1
@@ -229,9 +236,46 @@ class TrafficAnalyzer:
                     if dst_p == port:
                         s2r_packets += 1
                         s2r_bytes += pkt_len
+                        direction = "A -> B"
                     elif src_p == port:
                         r2s_packets += 1
                         r2s_bytes += pkt_len
+                        direction = "B -> A"
+
+                    # TCP flags extraction
+                    flags_val = 0
+                    try:
+                        raw_flags = getattr(tcp, "flags", None)
+                        if raw_flags is not None:
+                            flags_val = int(str(raw_flags), 0)
+                    except Exception:
+                        flags_val = 0
+
+                    flag_names = []
+                    if flags_val & 0x02:
+                        flag_names.append("SYN")
+                    if flags_val & 0x01:
+                        flag_names.append("FIN")
+                    if flags_val & 0x04:
+                        flag_names.append("RST")
+                    if flags_val & 0x08:
+                        flag_names.append("PSH")
+                    if flags_val & 0x10:
+                        flag_names.append("ACK")
+                    if flags_val & 0x20:
+                        flag_names.append("URG")
+
+                    flags_str = ", ".join(flag_names) if flag_names else "-"
+
+                packets.append(
+                    {
+                        "index": total_packets,
+                        "direction": direction,
+                        "flags": flags_str,
+                        "payload_bytes": p_payload_len,
+                        "frame_bytes": pkt_len,
+                    }
+                )
 
         except Exception as exc:
             return {
@@ -255,7 +299,7 @@ class TrafficAnalyzer:
             }
 
         # ── Overhead & averages calculation ──────────────────────────────────
-        total_captured_bytes = file_bytes
+        total_captured_bytes = total_frame_bytes
         avg_packet_size = (
             round(total_captured_bytes / total_packets, 2)
             if total_packets > 0
@@ -289,6 +333,7 @@ class TrafficAnalyzer:
             "total_packets": total_packets,
             "tcp_packets": tcp_packets,
             "total_captured_bytes": total_captured_bytes,
+            "capture_file_bytes": file_bytes,
             "min_packet_size_bytes": min_size or 0,
             "max_packet_size_bytes": max_size or 0,
             "average_packet_size_bytes": avg_packet_size,
@@ -307,6 +352,7 @@ class TrafficAnalyzer:
             "traffic_duration_seconds": traffic_duration,
             "analyzed_at": datetime.now(IST),
             "analysis_error": None,
+            "packets": packets,
         }
 
     def analyze_experiment(
@@ -350,6 +396,81 @@ class TrafficAnalyzer:
             original_message_size_bytes=msg_size,
             server_port=server_port,
         )
+
+        capture_interface = capture_doc.get("capture_interface") if capture_doc else None
+        capture_status = capture_doc.get("capture_status") if capture_doc else None
+        sender_id = capture_doc.get("device_a_id") if capture_doc else None
+        receiver_id = capture_doc.get("device_b_id") if capture_doc else None
+        profile_id = capture_doc.get("profile_id") if capture_doc else None
+
+        exp_doc = None
+        try:
+            exp_doc = self.db["experiments"].find_one({"experiment_id": experiment_id})
+        except Exception:
+            exp_doc = None
+
+        if exp_doc:
+            if not sender_id:
+                sender_id = exp_doc.get("sender_id")
+            if not receiver_id:
+                receiver_id = exp_doc.get("receiver_id")
+            if not profile_id:
+                profile_id = exp_doc.get("selected_profile_id")
+            if not capture_interface and exp_doc.get("capture_interface"):
+                capture_interface = exp_doc.get("capture_interface")
+            if not capture_status and exp_doc.get("packet_capture", {}).get("capture_status"):
+                capture_status = exp_doc.get("packet_capture", {}).get("capture_status")
+
+        sender_name = None
+        if sender_id:
+            try:
+                dev = self.db["devices"].find_one({"device_id": sender_id})
+                if dev:
+                    sender_name = dev.get("name")
+            except Exception:
+                pass
+        if not sender_name and exp_doc:
+            sender_name = exp_doc.get("sender_name")
+
+        receiver_name = None
+        if receiver_id:
+            try:
+                dev = self.db["devices"].find_one({"device_id": receiver_id})
+                if dev:
+                    receiver_name = dev.get("name")
+            except Exception:
+                pass
+        if not receiver_name and exp_doc:
+            receiver_name = exp_doc.get("receiver_name")
+
+        profile_name = None
+        if profile_id:
+            try:
+                prof = self.db["crypto_profiles"].find_one({"profile_id": profile_id})
+                if prof:
+                    profile_name = prof.get("name")
+            except Exception:
+                pass
+
+        analysis["experiment_id"] = experiment_id
+        if sender_id:
+            analysis["sender_id"] = sender_id
+        if sender_name:
+            analysis["sender_name"] = sender_name
+        if receiver_id:
+            analysis["receiver_id"] = receiver_id
+        if receiver_name:
+            analysis["receiver_name"] = receiver_name
+        if profile_id:
+            analysis["profile_id"] = profile_id
+        if profile_name:
+            analysis["profile_name"] = profile_name
+        if capture_interface:
+            analysis["capture_interface"] = capture_interface
+        if capture_status:
+            analysis["capture_status"] = capture_status
+        if capture_doc and capture_doc.get("capture_file_bytes"):
+            analysis["capture_file_bytes"] = capture_doc.get("capture_file_bytes")
 
         if persist:
             update_set: dict[str, Any] = {"traffic_analysis": analysis}
@@ -407,39 +528,205 @@ class TrafficAnalyzer:
         return results
 
     @staticmethod
-    def format_summary(experiment_id: str, analysis: dict[str, Any]) -> str:
-        """Format a concise terminal summary matching Phase 10 specifications."""
-        status = analysis.get("analysis_status", "unknown")
-        lines = [
-            "============= TRAFFIC ANALYSIS =============",
-            f"Experiment       : {experiment_id}",
-        ]
+    def format_packet_table(packets: list[dict[str, Any]]) -> str:
+        """Format detailed packet table."""
+        header = f"{'#':<4}{'Direction':<11}{'Flags':<12}{'Payload(B)':<12}{'Frame(B)'}"
+        divider = "-" * 54
+        rows = [header, divider]
+        for pkt in packets:
+            idx = pkt.get("index", "")
+            direction = pkt.get("direction", "-")
+            flags = pkt.get("flags", "-")
+            payload = pkt.get("payload_bytes", 0)
+            frame = pkt.get("frame_bytes", 0)
+            rows.append(f"{idx:<4}{direction:<11}{flags:<12}{payload:<12}{frame}")
+        return "\n".join(rows)
+
+    def format_summary(
+        self_or_experiment_id: Any,
+        experiment_id_or_analysis: Any = None,
+        analysis_or_none: Optional[dict[str, Any]] = None,
+        db: Any = None,
+    ) -> str:
+        """Format terminal summary matching Phase 10 / improved specifications."""
+        if isinstance(self_or_experiment_id, TrafficAnalyzer):
+            self_instance = self_or_experiment_id
+            experiment_id = str(experiment_id_or_analysis)
+            analysis = analysis_or_none or {}
+            resolved_db = db or getattr(self_instance, "db", None)
+        else:
+            experiment_id = str(self_or_experiment_id)
+            analysis = (
+                experiment_id_or_analysis
+                if isinstance(experiment_id_or_analysis, dict)
+                else (analysis_or_none or {})
+            )
+            resolved_db = db
+
+        if resolved_db is None:
+            try:
+                from database.connection import get_database
+
+                resolved_db = get_database()
+            except Exception:
+                resolved_db = None
+
+        # Resolve metadata if missing from analysis
+        sender_id = analysis.get("sender_id")
+        sender_name = analysis.get("sender_name")
+        receiver_id = analysis.get("receiver_id")
+        receiver_name = analysis.get("receiver_name")
+        profile_id = analysis.get("profile_id")
+        profile_name = analysis.get("profile_name")
+        capture_interface = analysis.get("capture_interface")
+        capture_status = analysis.get("capture_status")
+
+        if resolved_db is not None:
+            try:
+                if not (sender_id and receiver_id and profile_id and capture_interface):
+                    trap = resolved_db["traffic"].find_one({"experiment_id": experiment_id})
+                    if trap:
+                        sender_id = sender_id or trap.get("device_a_id")
+                        receiver_id = receiver_id or trap.get("device_b_id")
+                        profile_id = profile_id or trap.get("profile_id")
+                        capture_interface = capture_interface or trap.get("capture_interface")
+                        capture_status = capture_status or trap.get("capture_status")
+                if not (sender_id and receiver_id and profile_id):
+                    exp_doc = resolved_db["experiments"].find_one({"experiment_id": experiment_id})
+                    if exp_doc:
+                        sender_id = sender_id or exp_doc.get("sender_id")
+                        receiver_id = receiver_id or exp_doc.get("receiver_id")
+                        profile_id = profile_id or exp_doc.get("selected_profile_id")
+                        sender_name = sender_name or exp_doc.get("sender_name")
+                        receiver_name = receiver_name or exp_doc.get("receiver_name")
+
+                # Resolve human-readable names dynamically
+                if sender_id and not sender_name:
+                    dev = resolved_db["devices"].find_one({"device_id": sender_id})
+                    if dev:
+                        sender_name = dev.get("name")
+                if receiver_id and not receiver_name:
+                    dev = resolved_db["devices"].find_one({"device_id": receiver_id})
+                    if dev:
+                        receiver_name = dev.get("name")
+                if profile_id and not profile_name:
+                    prof = resolved_db["crypto_profiles"].find_one({"profile_id": profile_id})
+                    if prof:
+                        profile_name = prof.get("name")
+            except Exception:
+                pass
+
+        # Formatting displays for EXPERIMENT DETAILS
+        if sender_name and sender_id and sender_name != sender_id:
+            sender_disp = f"{sender_name} [{sender_id}]"
+        elif sender_name or sender_id:
+            sender_disp = f"{sender_name or sender_id}"
+        else:
+            sender_disp = "Unknown"
+
+        if receiver_name and receiver_id and receiver_name != receiver_id:
+            receiver_disp = f"{receiver_name} [{receiver_id}]"
+        elif receiver_name or receiver_id:
+            receiver_disp = f"{receiver_name or receiver_id}"
+        else:
+            receiver_disp = "Unknown"
+
+        if profile_id and profile_name and profile_name != profile_id:
+            profile_disp = f"{profile_id} - {profile_name}"
+        elif profile_id or profile_name:
+            profile_disp = f"{profile_id or profile_name}"
+        else:
+            profile_disp = "Unknown"
+
         msg_size = analysis.get("message_size_bytes")
         if msg_size is None:
             msg_size = analysis.get("original_message_size_bytes")
-        if msg_size is not None:
-            lines.append(f"Message size     : {msg_size} B")
+        msg_size_disp = f"{msg_size} B" if msg_size is not None else "Unknown"
 
-        if status == "completed":
+        cap_iface_disp = str(capture_interface) if capture_interface else "Unknown"
+        cap_status_disp = str(capture_status or "completed")
+        analysis_status = analysis.get("analysis_status", "unknown")
+
+        lines = [
+            "================== TRAFFIC ANALYSIS ==================",
+            "",
+            "EXPERIMENT DETAILS",
+            "-" * 54,
+            f"{'Experiment ID':<18}: {experiment_id}",
+            f"{'Sender (A)':<18}: {sender_disp}",
+            f"{'Receiver (B)':<18}: {receiver_disp}",
+            f"{'Crypto Profile':<18}: {profile_disp}",
+            f"{'Message Size':<18}: {msg_size_disp}",
+            f"{'Capture Interface':<18}: {cap_iface_disp}",
+            "",
+            "TRAFFIC SUMMARY",
+            "-" * 54,
+        ]
+
+        if analysis_status == "completed":
+            dur = analysis.get("traffic_duration_seconds", 0.0)
+            dur_disp = f"{dur:.3f} s" if isinstance(dur, (int, float)) else f"{dur}"
+            avg_size = analysis.get("average_packet_size_bytes", 0.0)
+            avg_size_disp = (
+                f"{avg_size:.2f} B"
+                if isinstance(avg_size, (int, float))
+                else f"{avg_size} B"
+            )
+
             lines.extend(
                 [
-                    f"Packets          : {analysis.get('total_packets', 0)}",
-                    f"Captured bytes   : {analysis.get('total_captured_bytes', 0)}",
-                    f"TCP payload      : {analysis.get('tcp_payload_bytes', 0)} B",
-                    f"Retransmissions  : {analysis.get('tcp_retransmissions', 0)}",
-                    f"Network overhead : {analysis.get('network_overhead_bytes', 0)} B",
-                    f"Overhead         : {analysis.get('network_overhead_percent', 0.0):.2f}%",
-                    f"Status           : {status}",
+                    f"{'Total Packets':<18}: {analysis.get('total_packets', 0)}",
+                    f"{'A -> B Packets':<18}: {analysis.get('sender_to_receiver_packets', 0)}",
+                    f"{'B -> A Packets':<18}: {analysis.get('receiver_to_sender_packets', 0)}",
+                    f"{'Data Packets':<18}: {analysis.get('application_data_packets', 0)}",
+                    f"{'Captured Bytes':<18}: {analysis.get('total_captured_bytes', 0)} B",
+                    f"{'TCP Payload':<18}: {analysis.get('tcp_payload_bytes', 0)} B",
+                    f"{'Min Packet Size':<18}: {analysis.get('min_packet_size_bytes', 0)} B",
+                    f"{'Max Packet Size':<18}: {analysis.get('max_packet_size_bytes', 0)} B",
+                    f"{'Avg Packet Size':<18}: {avg_size_disp}",
+                    f"{'Retransmissions':<18}: {analysis.get('tcp_retransmissions', 0)}",
+                    f"{'Traffic Duration':<18}: {dur_disp}",
+                    "",
+                    "NETWORK OVERHEAD",
+                    "-" * 54,
+                    f"{'Overhead Bytes':<18}: {analysis.get('network_overhead_bytes', 0)} B",
+                    f"{'Overhead Percent':<18}: {analysis.get('network_overhead_percent', 0.0):.2f}%",
+                ]
+            )
+
+            packets = analysis.get("packets", [])
+            if packets:
+                lines.extend(
+                    [
+                        "",
+                        "PACKET DETAILS",
+                        "-" * 54,
+                        TrafficAnalyzer.format_packet_table(packets),
+                    ]
+                )
+
+            lines.extend(
+                [
+                    "-" * 54,
+                    f"{'Capture Status':<18}: {cap_status_disp}",
+                    f"{'Analysis Status':<18}: {analysis_status}",
+                    "=" * 54,
                 ]
             )
         else:
+            err = analysis.get("analysis_error", "Unknown error")
             lines.extend(
                 [
-                    f"Status           : {status}",
-                    f"Error            : {analysis.get('analysis_error', 'Unknown error')}",
+                    f"{'Status':<18}: {analysis_status}",
+                    f"{'Error':<18}: {err}",
+                    "-" * 54,
+                    f"{'Capture Status':<18}: {cap_status_disp}",
+                    f"{'Analysis Status':<18}: {analysis_status}",
+                    f"{'Error':<18}: {err}",
+                    "=" * 54,
                 ]
             )
-        lines.append("============================================")
+
         return "\n".join(lines)
 
 

@@ -1,3 +1,10 @@
+"""
+Phase 9 - Capturing traffic using Wireshark
+Captures TCP packets captured during transmission
+
+Run from backend/: python capture_monitor.py
+"""
+
 import subprocess
 import select
 import time

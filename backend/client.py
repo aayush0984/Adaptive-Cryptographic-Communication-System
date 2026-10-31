@@ -1,4 +1,7 @@
-"""Client for the phase-8 secure sender/receiver protocol with adaptive encryption selection."""
+"""
+Client for the phase-8 secure sender/receiver protocol with adaptive encryption selection.
+Run from backend/: python client.py
+"""
 
 from __future__ import annotations
 
