@@ -297,7 +297,6 @@ export default function TrafficTab() {
           <h1>Traffic Analysis</h1>
           <p>
             Packet dynamics and transport overhead from TShark captures, analysed with PyShark.
-            Payloads are never decrypted.
           </p>
         </div>
         <div className="traffic-toolbar-right">

@@ -24,6 +24,7 @@ import {
   Zap,
 } from 'lucide-react'
 import TrafficTab from './TrafficTab'
+import TransmissionTimeline from './TransmissionTimeline'
 
 const api = async (path, options = {}) => {
   const response = await fetch(path, {
@@ -214,6 +215,7 @@ function ExperimentTab({ devices, health }) {
   const [message, setMessage] = useState('temperature=27.4; humidity=63')
   const [selection, setSelection] = useState(null)
   const [transmission, setTransmission] = useState(null)
+  const [stages, setStages] = useState(null)
   const [busy, setBusy] = useState(false)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
@@ -228,7 +230,7 @@ function ExperimentTab({ devices, health }) {
   const bytes = new TextEncoder().encode(message).length
 
   const runSelection = async () => {
-    setBusy(true); setError(''); setSelection(null); setTransmission(null)
+    setBusy(true); setError(''); setSelection(null); setTransmission(null); setStages(null)
     try {
       const data = await api('/api/select', {
         method: 'POST',
@@ -243,9 +245,9 @@ function ExperimentTab({ devices, health }) {
 
   const transmit = async () => {
     if (!selection) return
-    setSending(true); setError('')
+    setSending(true); setError(''); setStages(null)
     try {
-      const data = await api('/api/transmit', {
+      const data = await api('/api/transmit/detailed', {
         method: 'POST',
         body: JSON.stringify({
           sender_id: senderId,
@@ -255,8 +257,26 @@ function ExperimentTab({ devices, health }) {
           experiment_id: selection.experiment_id,
         }),
       })
+      setStages(data)
       setTransmission(data)
-    } catch (e) { setError(e.message) } finally { setSending(false) }
+    } catch (e) {
+      // Fallback to simple transmit if detailed is unavailable
+      try {
+        const fbData = await api('/api/transmit', {
+          method: 'POST',
+          body: JSON.stringify({
+            sender_id: senderId,
+            receiver_id: receiverId,
+            message,
+            profile_id: selection.winning_profile.profile_id,
+            experiment_id: selection.experiment_id,
+          }),
+        })
+        setTransmission(fbData)
+      } catch (fbErr) {
+        setError(e.message || fbErr.message)
+      }
+    } finally { setSending(false) }
   }
 
   return (
@@ -283,8 +303,8 @@ function ExperimentTab({ devices, health }) {
           </div>
 
           <div className="form-grid">
-            <label>Sender device<select value={senderId} onChange={(e) => { setSenderId(e.target.value); setSelection(null); setError(''); setTransmission(null) }}>{devices.map(d => <option value={d.device_id} key={d.device_id}>{d.name}</option>)}</select></label>
-            <label>Receiver device<select value={receiverId} onChange={(e) => { setReceiverId(e.target.value); setSelection(null); setError(''); setTransmission(null) }}>{devices.map(d => <option value={d.device_id} key={d.device_id}>{d.name}</option>)}</select></label>
+            <label>Sender device<select value={senderId} onChange={(e) => { setSenderId(e.target.value); setSelection(null); setError(''); setTransmission(null); setStages(null) }}>{devices.map(d => <option value={d.device_id} key={d.device_id}>{d.name}</option>)}</select></label>
+            <label>Receiver device<select value={receiverId} onChange={(e) => { setReceiverId(e.target.value); setSelection(null); setError(''); setTransmission(null); setStages(null) }}>{devices.map(d => <option value={d.device_id} key={d.device_id}>{d.name}</option>)}</select></label>
           </div>
 
           <div className="device-pair">
@@ -293,7 +313,7 @@ function ExperimentTab({ devices, health }) {
             <DevicePreview label="Device B · receiver" device={receiver} />
           </div>
 
-          <label className="message-field">Payload<textarea rows="4" value={message} onChange={(e) => { setMessage(e.target.value); setSelection(null); setError(''); setTransmission(null) }} /><span className="byte-counter">{bytes} UTF-8 bytes</span></label>
+          <label className="message-field">Payload<textarea rows="4" value={message} onChange={(e) => { setMessage(e.target.value); setSelection(null); setError(''); setTransmission(null); setStages(null) }} /><span className="byte-counter">{bytes} UTF-8 bytes</span></label>
 
           <button className="primary" onClick={runSelection} disabled={busy || !senderId || !receiverId || senderId === receiverId}>
             {busy ? <><RefreshCw className="spin" size={18} /> Evaluating profiles…</> : <><Sparkles size={18} /> Analyze & select profile</>}
@@ -323,11 +343,11 @@ function ExperimentTab({ devices, health }) {
 
             <div className="analysis-grid">
               <div className="panel">
-                <div className="panel-heading compact"><div><span className="section-number">02</span><div><h2>Adaptive weights</h2><p>Pressure automatically shifts the optimization objective.</p></div></div></div>
+                <div className="panel-heading compact"><div><span className="section-number">02</span><div><h2>Adaptive Weights</h2><p>Pressure automatically shifts the optimization objective.</p></div></div></div>
                 <WeightBars weights={selection.dynamic_weights} pressures={selection.constraint_pressures} />
               </div>
               <div className="panel">
-                <div className="panel-heading compact"><div><span className="section-number">03</span><div><h2>Combined constraints</h2><p>The stricter endpoint requirement wins.</p></div></div></div>
+                <div className="panel-heading compact"><div><span className="section-number">03</span><div><h2>Constraints</h2><p>The stricter endpoint requirement applies.</p></div></div></div>
                 <div className="constraint-grid">
                   <Metric icon={HardDrive} label="Memory limit" value={fmtRam(selection.combined_constraints.memory_limit_kb)} />
                   <Metric icon={Gauge} label="Latency limit" value={`${selection.combined_constraints.latency_limit_ms} ms`} />
@@ -338,7 +358,7 @@ function ExperimentTab({ devices, health }) {
             </div>
 
             <div className="panel">
-              <div className="panel-heading compact"><div><span className="section-number">04</span><div><h2>Profile decision trace</h2><p>Compatibility checks, performance estimates and selection scores for each profile.</p></div></div></div>
+              <div className="panel-heading compact"><div><span className="section-number">04</span><div><h2>Profile Decision</h2><p>Compatibility checks, performance estimates and selection scores for each profile.</p></div></div></div>
               <div className="candidate-list">
                 {selection.candidate_details.map(item => <CandidateCard item={item} selectedId={selection.winning_profile.profile_id} key={item.profile_id} />)}
               </div>
@@ -348,7 +368,30 @@ function ExperimentTab({ devices, health }) {
               <div><Radio size={22} /><div><h3>Ready for secure transmission</h3><p>Uses the selected profile over your existing framed TCP protocol on port 5000.</p></div></div>
               <button className="secondary" onClick={transmit} disabled={sending}>{sending ? <><RefreshCw className="spin" size={17} /> Sending…</> : <><Send size={17} /> Transmit securely</>}</button>
             </div>
-            {transmission && <div className="success-box"><CheckCircle2 size={18} /><div><strong>Transmission accepted.</strong><span>Integrity verification {transmission.message_recovered ? 'passed' : 'failed'} · {transmission.experiment_id}</span></div></div>}
+
+            {sending && (
+              <div className="panel" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '18px 20px', border: '1px solid rgba(85,224,179,0.3)', background: 'rgba(85,224,179,0.04)', borderRadius: 14 }}>
+                <RefreshCw className="spin" size={20} style={{ color: 'var(--accent)' }} />
+                <div>
+                  <h4 style={{ margin: '0 0 2px', fontSize: 13, color: 'var(--text)' }}>Executing cryptographic transmission...</h4>
+                  <p style={{ margin: 0, fontSize: 11, color: 'var(--muted)' }}>
+                    Generating keys, computing authenticated AES-GCM encryption, transmitting payload via TCP port 5000, and performing receiver verification.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {stages && <TransmissionTimeline data={stages} />}
+
+            {!stages && transmission && (
+              <div className="success-box">
+                <CheckCircle2 size={18} />
+                <div>
+                  <strong>Transmission accepted.</strong>
+                  <span>Integrity verification {transmission.message_recovered ? 'passed' : 'failed'} · {transmission.experiment_id}</span>
+                </div>
+              </div>
+            )}
           </>
         )}
       </section>
