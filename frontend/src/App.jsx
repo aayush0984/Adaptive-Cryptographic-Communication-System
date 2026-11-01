@@ -23,6 +23,7 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
+import TrafficTab from './TrafficTab'
 
 const api = async (path, options = {}) => {
   const response = await fetch(path, {
@@ -434,6 +435,7 @@ export default function App() {
         <div className="brand"><div className="brand-mark"><LockKeyhole size={20} /></div><div><strong>Adaptive Crypto</strong><span>IoT Control Plane</span></div></div>
         <nav>
           <button className={tab === 'experiment' ? 'active' : ''} onClick={() => setTab('experiment')}><Activity size={16} /> Experiment</button>
+          <button className={tab === 'traffic' ? 'active' : ''} onClick={() => setTab('traffic')}><Radio size={16} /> Traffic</button>
           <button className={tab === 'profiles' ? 'active' : ''} onClick={() => setTab('profiles')}><KeyRound size={16} /> Profiles</button>
           <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}><History size={16} /> History</button>
         </nav>
@@ -445,6 +447,7 @@ export default function App() {
         {tab === 'experiment' && <ExperimentTab devices={devices} health={health} />}
         {tab === 'profiles' && <ProfilesTab profiles={profiles} />}
         {tab === 'history' && <HistoryTab />}
+        {tab === 'traffic' && <TrafficTab />}
       </main>
 
       <footer><span>Adaptive Cryptographic Algorithm Selection for Resource-Constrained IoT</span><span>Device constraints · benchmark evidence · explainable selection · traffic analysis</span></footer>

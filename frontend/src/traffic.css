@@ -1,48 +1,290 @@
-/* Traffic analysis tab. Reuses your existing .panel, .badge, .content-page, .page-title,
-   .secondary, .error-box and .spin classes. Colours fall back to neutral values if your
-   theme variables are named differently. */
-.traffic-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.traffic-actions { display: flex; gap: 8px; }
-.traffic-pending .secondary { margin-top: 12px; }
-.traffic-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
-.traffic-stat { display: flex; gap: 12px; align-items: center; padding: 14px 16px; border: 1px solid rgba(128,128,128,.25); border-radius: 12px; }
-.traffic-stat-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: rgba(79,140,255,.14); color: var(--accent, #4f8cff); }
-.traffic-stat span { display: block; font-size: 12px; opacity: .7; }
+/* ============================================================
+   Traffic Analysis Tab — traffic.css
+   Reuses: .panel, .badge, .content-page, .page-title,
+           .secondary, .error-box, .spin from styles.css
+   ============================================================ */
+
+/* ── Header row: title left, controls right ── */
+.traffic-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.traffic-toolbar-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.traffic-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.traffic-refresh-time {
+  font-size: 11px;
+  opacity: .5;
+}
+.traffic-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── Summary stat cards ── */
+.traffic-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.traffic-stat {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid rgba(128,128,128,.25);
+  border-radius: 12px;
+  transition: border-color .25s, background .25s;
+}
+.traffic-stat-flash {
+  border-color: rgba(79,140,255,.55);
+  background: rgba(79,140,255,.06);
+}
+.traffic-stat-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(79,140,255,.14);
+  color: var(--accent, #4f8cff);
+  flex-shrink: 0;
+}
+.traffic-stat span  { display: block; font-size: 12px; opacity: .7; }
 .traffic-stat strong { display: block; font-size: 20px; line-height: 1.2; }
-.traffic-stat small { opacity: .6; font-size: 11px; }
+.traffic-stat small  { opacity: .6; font-size: 11px; }
 
-.traffic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-bottom: 16px; }
-.traffic-muted { opacity: .65; font-size: 13px; }
-.traffic-empty { display: flex; gap: 14px; align-items: center; padding: 20px; }
-.traffic-empty p { margin: 4px 0 0; opacity: .7; }
+/* ── Stacked panels layout ── */
+.traffic-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-top: 20px;
+  margin-bottom: 24px;
+}
 
-.traffic-bars { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
-.traffic-bar-row { display: grid; grid-template-columns: 44px 1fr; gap: 6px 10px; align-items: center; }
-.traffic-bar-row strong { grid-column: 2; font-size: 12px; font-weight: 500; opacity: .75; }
-.traffic-bar-label { font-weight: 600; }
-.traffic-bar-track { height: 10px; border-radius: 6px; background: rgba(128,128,128,.2); overflow: hidden; }
-.traffic-bar-fill { height: 100%; border-radius: 6px; background: var(--accent, #4f8cff); }
+/* ── Session detail heading & dropdown ── */
+.session-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.session-detail-heading > div:first-child {
+  flex: 1;
+  min-width: 240px;
+}
+.traffic-exp-select-wrap {
+  position: relative;
+  min-width: 260px;
+  max-width: 360px;
+  flex-shrink: 0;
+}
+.traffic-exp-select-icon {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  opacity: .5;
+}
+.traffic-exp-select {
+  width: 100%;
+  appearance: none;
+  background: rgba(128,128,128,.1);
+  border: 1px solid rgba(128,128,128,.3);
+  border-radius: 9px;
+  padding: 8px 34px 8px 12px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color .18s;
+}
+.traffic-exp-select:focus {
+  border-color: var(--accent, #4f8cff);
+}
+.traffic-exp-select option {
+  background: #1a1f2e;
+}
 
-.traffic-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; margin-top: 8px; }
-.traffic-detail-grid small { display: block; font-size: 11px; opacity: .65; }
+/* ── Experiment metadata block ── */
+.traffic-exp-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 16px;
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: rgba(79,140,255,.07);
+  border: 1px solid rgba(79,140,255,.18);
+  margin-bottom: 8px;
+}
+.traffic-exp-meta small  { display: block; font-size: 11px; opacity: .6; margin-bottom: 2px; }
+.traffic-exp-meta strong { font-size: 13px; }
+
+/* ── Section sub-labels ── */
+.traffic-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  opacity: .5;
+  margin: 18px 0 8px;
+}
+
+/* ── Detail metric grid ── */
+.traffic-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px 16px;
+  margin-top: 8px;
+}
+.traffic-detail-grid small  { display: block; font-size: 11px; opacity: .6; }
 .traffic-detail-grid strong { font-size: 14px; }
-.traffic-direction { display: grid; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(128,128,128,.25); }
-.traffic-direction div { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.traffic-direction strong { margin-left: auto; }
-.traffic-pending { display: flex; gap: 12px; align-items: flex-start; margin-top: 8px; }
-.traffic-pending p { margin: 4px 0 0; font-size: 13px; opacity: .75; }
-.traffic-link { margin-top: 14px; background: none; border: 0; color: var(--accent, #4f8cff); cursor: pointer; padding: 0; font-size: 12px; }
-.traffic-raw { margin-top: 8px; max-height: 260px; overflow: auto; font-size: 11px; padding: 10px; border-radius: 8px; background: rgba(128,128,128,.12); }
 
-.traffic-table { display: flex; flex-direction: column; }
-.traffic-row { display: grid; grid-template-columns: 1.6fr .6fr .8fr .7fr .9fr .8fr .9fr; gap: 10px; align-items: center; width: 100%; text-align: left; padding: 11px 14px; background: none; border: 0; border-bottom: 1px solid rgba(128,128,128,.18); color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
-.traffic-row:hover { background: rgba(128,128,128,.08); }
-.traffic-row.active { background: rgba(79,140,255,.12); }
-.traffic-head { cursor: default; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; opacity: .6; }
-.traffic-head:hover { background: none; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+/* ── Overhead & direction split row ── */
+.traffic-summary-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+  margin-top: 4px;
+}
+.traffic-split-block {
+  display: flex;
+  flex-direction: column;
+}
+.traffic-overhead-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px 16px;
+  margin-top: 8px;
+}
+.traffic-overhead-grid small  { display: block; font-size: 11px; opacity: .6; }
+.traffic-overhead-grid strong { font-size: 14px; }
 
+/* ── Directional breakdown ── */
+.traffic-direction {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+.traffic-direction div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(128,128,128,.08);
+}
+.traffic-direction strong      { margin-left: auto; }
+
+/* ── Profile bar chart ── */
+.traffic-bars { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
+.traffic-bar-row {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 6px 12px;
+  align-items: center;
+}
+.traffic-bar-row strong { grid-column: 2; font-size: 12px; font-weight: 500; opacity: .75; }
+.traffic-bar-label { font-weight: 600; font-size: 14px; }
+.traffic-bar-track {
+  height: 12px;
+  border-radius: 6px;
+  background: rgba(128,128,128,.2);
+  overflow: hidden;
+}
+.traffic-bar-fill {
+  height: 100%;
+  border-radius: 6px;
+  background: var(--accent, #4f8cff);
+  transition: width .4s ease;
+}
+
+/* ── Pending / failed state ── */
+.traffic-pending               { display: flex; gap: 12px; align-items: flex-start; margin-top: 8px; }
+.traffic-pending p             { margin: 4px 0 0; font-size: 13px; opacity: .75; }
+.traffic-pending .secondary    { margin-top: 12px; }
+
+/* ── Raw document toggle ── */
+.traffic-link {
+  margin-top: 14px;
+  display: block;
+  background: none;
+  border: 0;
+  color: var(--accent, #4f8cff);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+}
+.traffic-raw {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(128,128,128,.12);
+}
+
+/* ── Packet detail table ── */
+.pkt-table-wrap {
+  overflow-x: auto;
+  margin-top: 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(128,128,128,.2);
+}
+.pkt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.pkt-table th {
+  padding: 7px 10px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  opacity: .55;
+  border-bottom: 1px solid rgba(128,128,128,.2);
+  background: rgba(128,128,128,.07);
+}
+.pkt-table td           { padding: 6px 10px; border-bottom: 1px solid rgba(128,128,128,.1); }
+.pkt-table tr:last-child td { border-bottom: 0; }
+.pkt-table tr.pkt-data td   { background: rgba(79,140,255,.05); }
+
+.pkt-idx              { opacity: .5; width: 28px; }
+.pkt-dir              { font-weight: 600; }
+.pkt-dir.atob         { color: var(--accent, #4f8cff); }
+.pkt-dir.btoa         { color: #a78bfa; }
+.pkt-flags            { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pkt-payload.bold     { font-weight: 700; color: var(--accent, #4f8cff); }
+
+/* ── Responsive ── */
 @media (max-width: 720px) {
-  .traffic-row { grid-template-columns: 1.4fr .6fr .8fr .8fr; }
-  .traffic-row > :nth-child(3), .traffic-row > :nth-child(6) { display: none; }
+  .traffic-header-row { flex-direction: column; }
+  .traffic-toolbar-right { align-items: flex-start; }
+  .session-detail-heading { flex-direction: column; align-items: stretch; }
+  .traffic-exp-select-wrap { max-width: 100%; min-width: 100%; }
+  .traffic-exp-meta { grid-template-columns: 1fr; }
+  .traffic-detail-grid { grid-template-columns: 1fr; }
+  .traffic-summary-split { grid-template-columns: 1fr; }
 }

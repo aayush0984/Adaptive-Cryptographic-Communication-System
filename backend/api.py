@@ -199,3 +199,25 @@ def list_traffic(limit: int = Query(default=12, ge=1, le=100)) -> list[dict[str,
         return json_safe(docs)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/traffic/analyze-pending")
+def analyze_pending_traffic() -> list[dict[str, Any]]:
+    try:
+        from analysis.traffic_analyzer import TrafficAnalyzer
+        analyzer = TrafficAnalyzer()
+        results = analyzer.analyze_pending(persist=True)
+        return json_safe(results)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/traffic/{experiment_id}/analyze")
+def analyze_traffic(experiment_id: str) -> dict[str, Any]:
+    try:
+        from analysis.traffic_analyzer import TrafficAnalyzer
+        analyzer = TrafficAnalyzer()
+        result = analyzer.analyze_experiment(experiment_id, persist=True)
+        return json_safe(result)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
