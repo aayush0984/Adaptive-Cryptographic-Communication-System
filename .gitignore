@@ -50,8 +50,9 @@ htmlcov/
 *.bak
 *.tmp
 
-# Phase-wise plans
+# Phase-wise plans and other documents
 plan/
+docs/
 
 # Capture files
 backend/captures/
