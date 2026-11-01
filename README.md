@@ -57,7 +57,8 @@ The framework provides both an interactive **Full-Stack Web Application** and a 
                                                   ▼
 +---------------------------------------------------------------------------------------------------+
 |                                  Frontend Web Control Plane                                       |
-|  - Experiment Tab: Visual constraint selection, pressure bars, candidate trace, live transmit     |
+|  - Experiment Tab: Constraint selection, pressure bars, candidate trace, and interactive live    |
+|    step-by-step cryptographic workflow timeline (Device A -> TCP Wire -> Device B verification)  |
 |  - Traffic Tab: Session detail inspection, packet details table, per-profile cost comparison      |
 |  - Profiles Tab: Cryptographic catalog (C1 through C5)                                            |
 |  - History Tab: Chronological selection decisions and transmission audit log                      |
@@ -84,9 +85,7 @@ The system evaluates five complete cryptographic suites:
 
 ```text
 IoTEncryption/
-├── Instructions.md                  # Personal step-by-step setup and running runbook
 ├── README.md                        # Project documentation
-├── SYSTEM_FLOW.md                   # Detailed architectural and mathematical specification
 │
 ├── backend/                         # Backend Python services & engine
 │   ├── .env                         # Runtime configuration
@@ -132,12 +131,14 @@ IoTEncryption/
 │   ├── vite.config.js               # Vite config with API proxy to port 8000
 │   └── src/
 │       ├── App.jsx                  # Main app shell & navigation (Experiment, Traffic, Profiles, History)
+│       ├── TransmissionTimeline.jsx # Animated step-by-step secure communication workflow timeline
+│       ├── timeline.css             # Timeline & technical step card styles
 │       ├── TrafficTab.jsx           # Traffic Analysis dashboard & packet details table
 │       ├── traffic.css              # Traffic dashboard styles
 │       └── styles.css               # Base theme & UI component styles
 │
-└── tests/                           # Automated test suite (145 tests)
-    ├── unit/                        # Crypto, selector, protocol, packet capture, analyzer tests
+└── tests/                           # Automated test suite (147 tests)
+    ├── unit/                        # Crypto, selector, detailed transmission, protocol, packet capture, analyzer tests
     └── integration/                 # MongoDB and end-to-end socket integration tests
 ```
 
@@ -261,7 +262,10 @@ Start the services across separate terminal tabs:
    ```
 
 Open your browser at **`http://localhost:5173`**:
-* **Experiment Tab**: Pick Sender (A), Receiver (B), and a payload string. Click **Analyze & select profile**, then click **Transmit securely**.
+* **Experiment Tab**: Pick Sender (A), Receiver (B), and a payload string. Click **Analyze & select profile**, then click **Transmit securely**. This triggers live end-to-end cryptographic execution and mounts the interactive vertical timeline:
+  * **Device A — Sender**: Original plaintext size, key pair generation (RSA-OAEP, ECDH-P256/P384, or PSK), key wrapping/derivation, CSPRNG nonce generation, and authenticated AES-GCM encryption with exact timings.
+  * **Network Transmission**: Wire metrics over TCP port 5000, length-prefixed framing headers, payload bytes, and transmission latency.
+  * **Device B — Receiver**: Private key unwrapping or ECDH HKDF derivation, AES-GCM GHASH tag verification (`TAG VERIFIED ✓`), decryption latency, side-by-side original vs. recovered message comparison, and integrity confirmation (`PASSED ✓`).
 * **Traffic Tab**: Inspect the session details on top (metadata, traffic summary, network overhead, directional breakdown, and the per-packet frame table). View the **Traffic cost by profile** comparison on the bottom across C1–C5.
 * **Profiles Tab**: Inspect cipher suite specifications.
 * **History Tab**: Review historical decisions.
@@ -362,8 +366,11 @@ Every analysis run automatically generates an exported report text file under `b
 The comprehensive test suite covers cryptographic primitives, two-stage adaptive selection, PSK fallback, communication framing, capture management, and PyShark analysis:
 
 ```bash
-# Run all 145 tests
+# Run all 147 tests
 PYTHONPATH=backend backend/.venv/bin/pytest tests/ -v
+
+# Run transmission workflow unit tests
+PYTHONPATH=backend backend/.venv/bin/pytest tests/unit/test_transmit_detailed.py -v
 
 # Run only traffic analyzer unit tests
 PYTHONPATH=backend backend/.venv/bin/pytest tests/unit/test_traffic_analyzer.py -v
