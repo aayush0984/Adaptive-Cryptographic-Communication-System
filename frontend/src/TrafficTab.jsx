@@ -294,10 +294,10 @@ export default function TrafficTab() {
       <div className="traffic-header-row">
         <div className="page-title" style={{ marginBottom: 0 }}>
           <span className="eyebrow">Wire-level evidence</span>
-          <h1>Traffic analysis</h1>
+          <h1>Traffic Analysis</h1>
           <p>
             Packet dynamics and transport overhead from TShark captures, analysed with PyShark.
-            Payloads are never decrypted here.
+            Payloads are never decrypted.
           </p>
         </div>
         <div className="traffic-toolbar-right">

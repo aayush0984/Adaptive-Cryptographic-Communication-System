@@ -1,26 +1,24 @@
 # Adaptive Cryptographic Configuration Selection & Secure IoT Communication
 
-An end-to-end adaptive security and network analysis framework for resource-constrained Internet of Things (IoT) devices.
-
-The system dynamically evaluates cryptographic profiles (**AES-GCM**, **RSA-OAEP**, **ECDH with HKDF**) against hardware constraints (**RAM, CPU, security policy, packet size limits, latency ceilings, and power source**) using empirical benchmark evidence from MongoDB. It derives real-time multi-objective weights based on endpoint pressures and message payload size, selects the optimal cipher suite, transmits encrypted data over a framed TCP protocol, captures wire traffic in an isolated network monitor using **TShark**, and performs offline deep packet inspection using **PyShark** to quantify communication overhead.
+An end-to-end adaptive security and network analysis framework for resource-constrained Internet of Things (IoT) devices, featuring an intelligent multi-objective selection engine, framed TCP transmission, live TShark packet sniffing, deep PyShark traffic dissection, and a modern full-stack web control plane.
 
 ---
 
-## The Problem
+## Overview & Problem Statement
 
-Deploying cryptography on heterogeneous IoT networks presents fundamental trade-offs:
-* **Resource Constraints**: Low-power microcontrollers (e.g., ESP32, STM32) have limited RAM (hundreds of KB) and battery power, making asymmetric operations like RSA-3072 prohibitive in execution time and memory.
-* **Security Requirements**: High-value gateways or servers mandate strong cryptographic security (e.g., 256-bit security floors), preventing the use of legacy or standard-tier ciphers.
+Deploying secure communication across heterogeneous IoT networks presents fundamental challenges:
+* **Severe Resource Disparity**: Low-power microcontrollers (e.g., ESP32, STM32, Arduino) have limited RAM (often hundreds of KB) and battery power, making heavy asymmetric operations like RSA-3072 prohibitive in execution time and memory.
+* **Rigid Security Policies**: Edge servers and cloud gateways mandate strict security floors (e.g., 256-bit security), rejecting standard or legacy ciphers.
 * **Static Configuration Fragility**: Hardcoding a single cipher suite across diverse devices leads to either security vulnerabilities or device crashes from resource exhaustion.
-* **Network & Framing Overhead**: For small IoT telemetry payloads (e.g., 4–16 bytes), cryptographic expansion, protocol framing, and TCP handshakes generate significant protocol overhead that must be measured and optimized.
+* **Wire & Framing Overhead**: For small IoT telemetry payloads (e.g., 4–32 bytes), cryptographic expansion, protocol headers, and TCP handshakes generate significant protocol overhead that must be measured and optimized.
 
-This framework solves these challenges by dynamically negotiating the optimal cryptographic profile per transaction and measuring the resulting wire performance.
+This framework solves these challenges by dynamically negotiating the optimal cryptographic profile per transaction based on real-time endpoint pressures, executing secure transmissions, capturing wire traffic on loopback, and dissecting network overhead.
 
 ---
 
-## High-Level Architecture
+## System Architecture
 
-The system operates across a **four-stage distributed workflow**:
+The framework provides both an interactive **Full-Stack Web Application** and a scriptable **Terminal / CLI Workflow**:
 
 ```text
 +---------------------------------------------------------------------------------------------------+
@@ -29,282 +27,350 @@ The system operates across a **four-stage distributed workflow**:
 +---------------------------------------------------------------------------------------------------+
                                                   │
                                                   ▼
-+-----------------------+             +-----------------------+             +-----------------------+
-|  Device A (Sender)    | ──────────> |   Adaptive Selector   | <────────── |  Device B (Receiver)   |
-|  - RAM, CPU, Sec Floor|             |  Stage 1: Hard Filter |             |  - RAM, CPU, Sec Floor|
-|  - Battery / Mains    |             |  Stage 2: Score & Rank|             |  - Battery / Mains    |
-|  - User Plaintext     |             +-----------┬-----------+             |  - Decrypt & Echo ACK |
-+-----------------------+                         │                         +-----------------------+
-                                                  │ Selected Profile (e.g., C4)
-                                                  ▼
-                                      +-----------------------+
-                                      | Framed TCP Connection |
-                                      |   (Port 5000, lo0)    |
-                                      +-----------┬-----------+
-                                                  │
-                                      ┌───────────┴───────────┐
-                                      ▼                       ▼
-                           [Terminal 1: SERVER]    [Terminal 2: CLIENT]
-                                      │                       │
-                                      └───────────┬───────────┘
-                                                  │ TCP Wire Packets
-                                                  ▼
-                                      [Terminal 3: CAPTURE MONITOR]
-                                      (TShark Sniffer on lo0 :5000)
++---------------------------------------------------------------------------------------------------+
+|                           Adaptive Cryptographic Decision Engine                                  |
+|  Stage 1: Hard Constraint Filtering (RAM, CPU, Security Floor, MTU, Latency Ceilings)              |
+|  Stage 2: Multi-Objective Dynamic Weighting (Time, Memory, Communication, Energy Pressures)       |
++---------------------------------------------------------------------------------------------------+
                                                   │
                                                   ▼
-                                      captures/experiment_<id>.pcapng
+                         ┌─────────────────────────────────────────────────┐
+                         │ Selected Profile: C1 | C2 | C3 | C4 | C5        │
+                         └────────────────────────┬────────────────────────┘
                                                   │
                                                   ▼
-                                      [Terminal 4: TRAFFIC ANALYZER]
-                                      (PyShark Offline Dissection)
++---------------------------------------------------------------------------------------------------+
+|                                  Communication & Wire Capture                                     |
+|  1. Sender (Device A)   ──[ Framed TCP / Port 5000 ]──>   2. Receiver Server (Device B)           |
+|                                                                                                   |
+|  3. Network Capture Monitor (TShark listening on lo0 :5000) ──> captures/experiment_<id>.pcapng   |
++---------------------------------------------------------------------------------------------------+
                                                   │
                                                   ▼
-                                      iot_security.traffic (Updated)
++---------------------------------------------------------------------------------------------------+
+|                                Offline PyShark Traffic Analysis                                   |
+|  - Directional packet counts (A -> B vs B -> A)       - Exact frame lengths vs file size          |
+|  - TCP flag decoding (SYN, ACK, PSH, FIN, RST)        - Wire overhead percentage vs plaintext     |
+|  - Export formatted report: backend/analysis/data/<experiment_id>.txt                             |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                                  Frontend Web Control Plane                                       |
+|  - Experiment Tab: Visual constraint selection, pressure bars, candidate trace, live transmit     |
+|  - Traffic Tab: Session detail inspection, packet details table, per-profile cost comparison      |
+|  - Profiles Tab: Cryptographic catalog (C1 through C5)                                            |
+|  - History Tab: Chronological selection decisions and transmission audit log                      |
++---------------------------------------------------------------------------------------------------+
 ```
 
 ---
 
-## Current Project Structure
+## Cryptographic Profiles Catalog
+
+The system evaluates five complete cryptographic suites:
+
+| ID | Suite Name | Key Establishment / KEM | Symmetric Encryption | Security Level | Primary Use Case |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`C1`** | RSA-2048 with AES-128-GCM | RSA-OAEP (2048-bit, SHA-256) | AES-128-GCM | Standard | Medium-power devices, legacy RSA infrastructure |
+| **`C2`** | RSA-3072 with AES-256-GCM | RSA-OAEP (3072-bit, SHA-256) | AES-256-GCM | High | High-capability single-board computers, strict security floors |
+| **`C3`** | ECDH-P256 with AES-128-GCM | Ephemeral ECDH (SECP256R1) + HKDF-SHA256 | AES-128-GCM | Standard | Highly resource-constrained MCUs (fast, lightweight) |
+| **`C4`** | ECDH-P384 with AES-256-GCM | Ephemeral ECDH (SECP384R1) + HKDF-SHA256 | AES-256-GCM | High | Top-tier security with low memory footprint |
+| **`C5`** | Fallback PSK with AES-128-GCM | Pre-Shared Key (256-bit symmetric) | AES-128-GCM | Basic / Fallback | Extreme constraint fallback when asymmetric key exchange fails |
+
+---
+
+## Repository Structure
 
 ```text
 IoTEncryption/
-├── backend/                         # Application source root
-│   ├── .env                         # Local runtime environment configuration
-│   ├── client.py                    # Terminal 2: Device A client CLI & sender workflow
-│   ├── server.py                    # Terminal 1: Device B TCP listener & message verification
-│   ├── capture_monitor.py           # Terminal 3: Long-running TShark loopback network monitor
+├── Instructions.md                  # Personal step-by-step setup and running runbook
+├── README.md                        # Project documentation
+├── SYSTEM_FLOW.md                   # Detailed architectural and mathematical specification
+│
+├── backend/                         # Backend Python services & engine
+│   ├── .env                         # Runtime configuration
+│   ├── requirements.txt             # Python package dependencies
+│   ├── api.py                       # FastAPI REST API (port 8000)
+│   ├── server.py                    # Receiver TCP server (Device B, port 5000)
+│   ├── client.py                    # Sender CLI client (Device A)
+│   ├── capture_monitor.py           # TShark packet capture monitor daemon
 │   ├── analyze_traffic.py           # Phase 10 CLI: PyShark offline traffic analysis entry point
 │   │
-│   ├── analysis/                    # Phase 10: PyShark packet dissection & overhead engine
-│   │   ├── __init__.py
-│   │   └── traffic_analyzer.py      # Core TrafficAnalyzer class & metric extractors
+│   ├── analysis/                    # Packet dissection & network metrics engine
+│   │   ├── traffic_analyzer.py      # Core TrafficAnalyzer class & formatters
+│   │   └── data/                    # Exported analysis reports (*.txt, git-ignored)
 │   │
-│   ├── capture/                     # Phase 9: Wireshark / TShark capture wrapper
-│   │   ├── __init__.py
-│   │   └── packet_capture.py        # Reusable PacketCapture manager & loopback interface detector
-│   │
+│   ├── capture/                     # TShark sniffer wrapper & loopback detector
+│   │   └── packet_capture.py
 │   ├── captures/                    # Destination directory for raw .pcapng files
-│   │   └── .gitkeep
-│   │
-│   ├── communication/               # Length-prefixed JSON protocol framing
-│   │   ├── __init__.py
-│   │   └── protocol.py              # Frame serializer/deserializer, sockets, and session state
-│   │
-│   ├── config/                      # Centralized configuration loaders
-│   │   └── __init__.py              # .env parsing and environment variable fallbacks
 │   │
 │   ├── crypto/                      # Low-level cryptographic primitives
-│   │   ├── __init__.py
 │   │   ├── aes_engine.py            # AES-128/256-GCM authenticated encryption
 │   │   ├── ecc_engine.py            # Ephemeral ECDH (P-256, P-384) + HKDF-SHA256
-│   │   ├── psk_engine.py            # Pre-Shared Key (PSK) + AES-128-GCM fallback engine
-│   │   └── rsa_engine.py            # RSA-OAEP (2048/3072-bit) with SHA-256
+│   │   ├── rsa_engine.py            # RSA-OAEP (2048/3072-bit) with SHA-256
+│   │   └── psk_engine.py            # Pre-Shared Key (PSK) + AES-128-GCM fallback
 │   │
-│   ├── database/                    # MongoDB connection lifecycle & schemas
-│   │   ├── __init__.py
-│   │   ├── connection.py            # Cached MongoClient & Database accessors
-│   │   ├── indexes.py               # Idempotent index creation across all collections
-│   │   └── seed_database.py         # Initial hardware devices and profile seeding script
+│   ├── database/                    # MongoDB connection & collections
+│   │   ├── connection.py            # MongoClient accessor & database singleton
+│   │   ├── indexes.py               # Database indexing across all collections
+│   │   └── seed_database.py         # Hardware devices and crypto profiles seeder
 │   │
-│   ├── evaluation/                  # Benchmarking engine for empirical evidence
-│   │   ├── __init__.py
-│   │   ├── benchmark.py             # Performance measurement harness (timing, RAM, RSS)
-│   │   ├── memory_monitor.py        # tracemalloc memory profiler
-│   │   └── statistics.py            # Outlier detection & summary statistics
+│   ├── evaluation/                  # Benchmarking engine
+│   │   ├── benchmark.py             # Performance measurement harness (timing, RAM)
+│   │   └── memory_monitor.py        # Memory profiler (tracemalloc)
 │   │
-│   ├── models/                      # Dataclasses and domain validation
-│   │   ├── __init__.py
-│   │   ├── crypto_profile.py        # Profile structure, security level, and cipher suite models
-│   │   └── device.py                # Device hardware constraints and power source models
-│   │
-│   ├── repositories/                # Repository layer for MongoDB persistence
-│   │   ├── __init__.py
-│   │   ├── benchmark_repository.py  # Querying benchmark timing and memory metrics
-│   │   ├── device_repository.py     # Active device query and lookups
-│   │   ├── experiment_repository.py # Experiment logging and provenance tracking
-│   │   └── profile_repository.py    # Crypto profile queries
-│   │
-│   └── selection/                   # Two-stage adaptive selection algorithm
-│       ├── __init__.py
-│       ├── compatibility.py         # Stage 1: Mandatory hard constraint filters
-│       ├── scoring.py               # Stage 2: Scenario pressures, weights, and scoring
-│       └── selector.py              # Orchestrator, interactive prompts, and decision logging
+│   ├── models/                      # Domain dataclasses (Device, CryptoProfile)
+│   ├── repositories/                # MongoDB abstraction layer (Device, Profile, Experiment, Benchmark)
+│   └── selection/                   # Two-stage adaptive selector
+│       ├── compatibility.py         # Stage 1: Hard constraint evaluation
+│       ├── scoring.py               # Stage 2: Scenario pressures, weights, scoring
+│       └── selector.py              # Selection orchestrator
 │
-├── scripts/                         # Maintenance tools
-│   └── migrate_experiments.py       # Historical schema migration and index sync
+├── frontend/                        # Web Control Plane (React 19 + Vite)
+│   ├── package.json
+│   ├── vite.config.js               # Vite config with API proxy to port 8000
+│   └── src/
+│       ├── App.jsx                  # Main app shell & navigation (Experiment, Traffic, Profiles, History)
+│       ├── TrafficTab.jsx           # Traffic Analysis dashboard & packet details table
+│       ├── traffic.css              # Traffic dashboard styles
+│       └── styles.css               # Base theme & UI component styles
 │
-└── tests/                           # Automated test suite
-    ├── unit/                        # Unit tests for crypto, protocol, capture, analysis, and C5 fallback
-    └── integration/                 # Integration tests for MongoDB and socket flows
+└── tests/                           # Automated test suite (145 tests)
+    ├── unit/                        # Crypto, selector, protocol, packet capture, analyzer tests
+    └── integration/                 # MongoDB and end-to-end socket integration tests
 ```
 
 ---
 
-## Technologies & Dependencies
+## Technologies & Stack
 
-* **Python 3.10+**: Core programming language.
-* **MongoDB (Community Server 7.0+)**: Primary document database (`iot_security`).
-* **`pymongo`**: Python driver for MongoDB database operations.
-* **`cryptography` (hazmat)**: High-speed, robust cryptographic implementations of AES-GCM, RSA-OAEP, ECDH, HKDF, and PSK.
-* **Wireshark / TShark (CLI)**: Packet capture engine used by `capture_monitor.py` for live loopback capture.
-* **PyShark**: Python wrapper for TShark packet dissection, used by `analyze_traffic.py` to parse `.pcapng` structures.
-* **`pytest`**: Unit and integration test runner.
-
----
-
-## MongoDB Collections & Schema Roles
-
-All documents reside in the **`iot_security`** database:
-
-| Collection | Description | Key Identifier |
-| :--- | :--- | :--- |
-| **`devices`** | Catalog of IoT hardware specifications: CPU level, available RAM (`available_memory_kb`), max packet MTU, latency ceilings, security policy (`standard`/`high`), and power source (`battery`/`mains`). | `device_id` (Unique) |
-| **`crypto_profiles`** | Catalog of supported cipher suites: `C1` (RSA-2048 + AES-128-GCM), `C2` (RSA-3072 + AES-256-GCM), `C3` (ECDH-P256 + AES-128-GCM), `C4` (ECDH-P384 + AES-256-GCM), and `C5` (Fallback PSK + AES-128-GCM). | `profile_id` (Unique) |
-| **`benchmarks`** | Empirical execution timings (`key_generation`, `key_establishment`, `encryption`, `decryption`) and peak heap allocations (`tracemalloc`) across message sizes. | `run_id` (Unique, Sparse) |
-| **`experiments`** | Records adaptive selection decisions, candidate rejection reasons, dynamic weights, constraint pressures, fallback metadata, and observed round-trip status. | `experiment_id` (Indexed) |
-| **`traffic`** | Stores Phase 9 capture metadata (`.pcapng` path, interface, filter, SHA-256 hash, timestamps) and Phase 10 nested `traffic_analysis` results. | `experiment_id` (Unique) |
+* **Backend & Cryptography**:
+  * Python 3.10+
+  * `cryptography` (hazmat): AES-GCM, RSA-OAEP, ECDH, HKDF
+  * `pymongo`: MongoDB database driver
+  * `fastapi` & `uvicorn`: RESTful API backend
+  * `pytest`: Unit and integration test runner
+* **Network & Traffic Dissection**:
+  * Wireshark / `tshark`: Wire sniffing on loopback interface
+  * `pyshark`: Packet inspection and TCP header dissection
+* **Database**:
+  * MongoDB Community Server 7.0+ (`iot_security` database)
+* **Frontend**:
+  * React 19 & Vite 8
+  * Lucide React icons
+  * Modern Dark-Mode IoT Control Plane UI
 
 ---
 
-## Phase-wise Overview (Phases 0–10)
+## Setup & Installation
 
-* **Phase 0 — Setup & Environment**: Repository structure, virtual environment, and MongoDB configuration.
-* **Phase 1 — Device Profiles Catalog**: Registered hardware specifications across 20 diverse IoT devices (microcontrollers and single-board computers including ESP32, Raspberry Pi 4 & 5, ESP8266, STM32, Arduino, Jetson Nano & Orin Nano, Teensy 4.1, etc.) in MongoDB `devices`.
-* **Phase 2 — Cryptographic Primitives**: AES-GCM, RSA-OAEP, and ECDH/HKDF engine implementations.
-* **Phase 3 — Empirical Benchmarking**: Benchmark harness measuring execution timings and memory for each profile/device pairing.
-* **Phase 4 — Hard Constraint Filtering (Stage 1)**: Rejects profiles violating security policy floor, CPU capability, memory capacity, latency ceilings, or MTU.
-* **Phase 5 — Dynamic Scenario Weighting (Stage 2)**: Computes continuous time, memory, communication, and energy pressures to dynamically weight optimization goals.
-* **Phase 6 — Multi-Objective Ranking**: Normalizes candidate metrics and calculates weighted cost scores with deterministic tie-breaking.
-* **Phase 7 — Explainability & Experiment Logging**: Generates rejection reasons, score breakdowns, and audit trails stored in `experiments`.
-* **Phase 8 — Secure TCP Communication**: Framing protocol over TCP socket; encrypts user message with chosen profile, verifies HMAC/tag, and echoes verification.
-* **Phase 9 — Wireshark/TShark Packet Capture**: Independent capture monitor (`capture_monitor.py`) listening on loopback interface, recording wire traffic into timestamped `.pcapng` files and storing metadata in `traffic`.
-* **Phase 10 — PyShark Network Traffic Analysis**: Offline deep packet inspector (`analyze_traffic.py`) calculating directional packet counts, TCP payload size, retransmissions, and wire overhead percentage.
-* **(Phase 11 — Future Work**: Multi-run comparative visual analytics and aggregate evaluation reporting).*
+### 1. System Prerequisites
 
----
-
-## Installation & Setup
-
-### 1. Prerequisites
-* **Python**: 3.10, 3.11, or 3.12 recommended.
-* **MongoDB**: Running locally at `mongodb://localhost:27017/`.
-* **Wireshark / TShark**:
-  * macOS: `brew install wireshark`
-  * Debian/Ubuntu: `sudo apt install tshark`
-  * Ensure your user has permissions to capture on loopback (`/dev/bpf*` on macOS, or add to `wireshark` group on Linux).
-
-### 2. Environment Setup
+Install MongoDB and Wireshark/TShark on your host:
 
 ```bash
-# Clone repository and enter directory
-cd /path/to/IoTEncryption
+# macOS (Homebrew)
+brew install mongodb-community wireshark
+brew services start mongodb-community
 
-# Create and activate virtual environment
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y mongodb-org tshark
+sudo systemctl start mongod
+```
+
+On macOS, allow non-root loopback packet capture:
+```bash
+sudo chmod 666 /dev/bpf*
+```
+
+---
+
+### 2. Backend Setup
+
+```bash
+cd backend
+
+# Create and activate Python virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies
+# Install Python dependencies
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. Environment Configuration (`.env`)
-
-Create or verify `.env` in the project root:
-
+Verify `backend/.env` exists:
 ```env
-MONGODB_URI=YOUR_DATABASE_URL
-MONGODB_DB=YOUR_DATABASE_NAME
+MONGODB_URI=mongodb://localhost:27017/
+MONGODB_DB=iot_security
 SERVER_HOST=127.0.0.1
 SERVER_PORT=5000
 CAPTURE_INTERFACE=lo0
-CAPTURE_DIR=captures
-FALLBACK_PSK_HEX=0123456789abcdef0123456789abcdef
+FALLBACK_PSK_HEX=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 ```
 
-### 4. Database Initialization
-
-Populate the database with device specifications, cryptographic profiles, initial benchmarks, and indexes:
-
+Initialize the database:
 ```bash
-# Seed devices and crypto profiles
+# Seed 20 devices and 5 cryptographic profiles
 python -m database.seed_database
 
-# Create MongoDB indexes
+# Create indexes across collections
 python -c "from database.indexes import create_indexes; print(create_indexes())"
 
-# (Optional) Run local benchmarks for simulated performance evidence
+# (Optional) Seed local benchmark evidence
 python -m evaluation.benchmark --all --dry-run
 ```
 
 ---
 
-## How to Run the System
-
-The project uses a **three-terminal runtime architecture** plus an **analysis step**:
-
-```text
-Terminal 1              Terminal 3              Terminal 2              Terminal 4 / Shell
-SERVER                  NETWORK MONITOR         CLIENT                  TRAFFIC ANALYZER
-python server.py        python capture_monitor.py python client.py      python analyze_traffic.py
-Receiver (Device B)     TShark Loopback Sniffer Sender (Device A)       PyShark Offline Metrics
-```
-
-### Execution Steps in Exact Order:
-
-#### Step 1: Start the Receiver Server (Terminal 1)
-```bash
-python server.py
-```
-*Listens on TCP port 5000, awaits HELLO frames, verifies profiles, decrypts ciphertext, and echoes ACK verification.*
-
-#### Step 2: Start the Network Capture Monitor (Terminal 3)
-```bash
-python capture_monitor.py
-```
-*Initializes TShark sniffer on loopback interface (`lo0`, `tcp port 5000`). Prints live packet summaries in real time without exposing plaintext or secrets.*
-
-```text
-================ NETWORK CAPTURE ================
-Interface : lo0
-Filter    : tcp port 5000
-Status    : Listening...
-```
-
-#### Step 3: Run the Sender Client (Terminal 2)
-```bash
-# Interactive mode (prompts for Device A, Device B, and message):
-python client.py
-
-# Or non-interactive / automated mode:
-python client.py --sender esp32 --receiver raspberry_pi_4 --message "Hello IoT Security"
-```
-
-*The client performs adaptive selection, prints the decision rationale, connects to Server, sends the encrypted frame, receives the ACK, and finishes.*
-
-#### Step 4: Inspect the Capture & Run Phase 10 Traffic Analysis
-Once the communication completes:
-* `capture_monitor.py` detects TCP session termination, finalizes the `.pcapng` file under `captures/`, and records metadata in `iot_security.traffic`.
-* Run `analyze_traffic.py` to perform PyShark analysis:
+### 3. Frontend Setup
 
 ```bash
-# Analyze a specific experiment:
-python analyze_traffic.py --experiment exp-a207ff8e
-
-# Or analyze all pending unanalyzed captures:
-python analyze_traffic.py
-
-# Or list all captures and status:
-python analyze_traffic.py --list
+cd ../frontend
+npm install
 ```
 
 ---
 
-## Test Suite
+## How to Run
 
-Run all unit tests using `pytest`:
+### Method A: Full-Stack Web Application (Recommended)
+
+Start the services across separate terminal tabs:
+
+1. **Terminal 1 — FastAPI Backend**:
+   ```bash
+   cd backend && source .venv/bin/activate
+   uvicorn api:app --reload --port 8000
+   ```
+2. **Terminal 2 — Receiver Server (Device B)**:
+   ```bash
+   cd backend && source .venv/bin/activate
+   python server.py
+   ```
+3. **Terminal 3 — Network Capture Monitor (TShark)**:
+   ```bash
+   cd backend && source .venv/bin/activate
+   python capture_monitor.py
+   ```
+4. **Terminal 4 — React Frontend (Vite)**:
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+
+Open your browser at **`http://localhost:5173`**:
+* **Experiment Tab**: Pick Sender (A), Receiver (B), and a payload string. Click **Analyze & select profile**, then click **Transmit securely**.
+* **Traffic Tab**: Inspect the session details on top (metadata, traffic summary, network overhead, directional breakdown, and the per-packet frame table). View the **Traffic cost by profile** comparison on the bottom across C1–C5.
+* **Profiles Tab**: Inspect cipher suite specifications.
+* **History Tab**: Review historical decisions.
+
+---
+
+### Method B: Terminal / CLI Workflow
+
+1. **Terminal 1 — Receiver Server**:
+   ```bash
+   cd backend && source .venv/bin/activate
+   python server.py
+   ```
+2. **Terminal 2 — Capture Monitor**:
+   ```bash
+   cd backend && source .venv/bin/activate
+   python capture_monitor.py
+   ```
+3. **Terminal 3 — Sender Client**:
+   ```bash
+   cd backend && source .venv/bin/activate
+   # Interactive prompt:
+   python client.py
+   # Or automated command:
+   python client.py --sender esp32 --receiver raspberry_pi_4 --message "temperature=24.5; humidity=60"
+   ```
+4. **Terminal 4 — Traffic Analysis CLI**:
+   ```bash
+   cd backend && source .venv/bin/activate
+   python analyze_traffic.py --experiment exp-a207ff8e
+   ```
+
+---
+
+## Traffic Analysis Output Format
+
+When running traffic analysis via CLI (`analyze_traffic.py`) or inspecting captures in the Web UI, the framework parses the raw `.pcapng` file using PyShark and formats an exact breakdown:
+
+```text
+================== TRAFFIC ANALYSIS ==================
+
+EXPERIMENT DETAILS
+------------------------------------------------------
+Experiment ID     : exp-a207ff8e
+Sender (A)        : ESP32 [esp32]
+Receiver (B)      : Raspberry Pi 4 [raspberry_pi_4]
+Crypto Profile    : C4 - ECDH-P384 with AES-256-GCM
+Message Size      : 4 B
+Capture Interface : lo0
+
+TRAFFIC SUMMARY
+------------------------------------------------------
+Total Packets     : 12
+A -> B Packets    : 6
+B -> A Packets    : 6
+Data Packets      : 2
+Captured Bytes    : 1203 B
+TCP Payload       : 507 B
+Min Packet Size   : 56 B
+Max Packet Size   : 323 B
+Avg Packet Size   : 100.25 B
+Retransmissions   : 0
+Traffic Duration  : 0.121 s
+
+NETWORK OVERHEAD
+------------------------------------------------------
+Overhead Bytes    : 1199 B
+Overhead Percent  : 29975.00%
+
+PACKET DETAILS
+------------------------------------------------------
+#   Direction  Flags       Payload(B)  Frame(B)
+------------------------------------------------------
+1   A -> B     SYN         0           68
+2   B -> A     SYN, ACK    0           68
+3   A -> B     ACK         0           56
+4   B -> A     ACK         0           56
+5   A -> B     PSH, ACK    240         296
+6   B -> A     ACK         0           56
+7   B -> A     PSH, ACK    267         323
+8   A -> B     ACK         0           56
+9   A -> B     FIN, ACK    0           56
+10  B -> A     ACK         0           56
+11  B -> A     FIN, ACK    0           56
+12  A -> B     ACK         0           56
+------------------------------------------------------
+Capture Status    : completed
+Analysis Status   : completed
+======================================================
+```
+
+Every analysis run automatically generates an exported report text file under `backend/analysis/data/<experiment_id>.txt`.
+
+---
+
+## Running Automated Tests
+
+The comprehensive test suite covers cryptographic primitives, two-stage adaptive selection, PSK fallback, communication framing, capture management, and PyShark analysis:
 
 ```bash
-# Run unit test suite (crypto engines, protocol, capture manager, traffic analyzer)
-pytest tests/unit/ -v
+# Run all 145 tests
+PYTHONPATH=backend backend/.venv/bin/pytest tests/ -v
+
+# Run only traffic analyzer unit tests
+PYTHONPATH=backend backend/.venv/bin/pytest tests/unit/test_traffic_analyzer.py -v
 ```
+
+---
+
+## License
+
+This project is developed for educational and academic research into adaptive security for constrained IoT environments.
